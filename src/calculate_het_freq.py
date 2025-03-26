@@ -21,11 +21,11 @@ logging.basicConfig(level=logging.INFO,
 
 # population sample id files
 POP_SAMPLE_FILE = {
-    'AFR': os.path.join(dirname(dirname(__file__)), 'resource', '1kGP.unrelated.AFR.txt'),
-    'AMR': os.path.join(dirname(dirname(__file__)), 'resource', '1kGP.unrelated.AMR.txt'),
-    'EAS': os.path.join(dirname(dirname(__file__)), 'resource', '1kGP.unrelated.EAS.txt'),
-    'EUR': os.path.join(dirname(dirname(__file__)), 'resource', '1kGP.unrelated.EUR.txt'),
-    'SAS': os.path.join(dirname(dirname(__file__)), 'resource', '1kGP.unrelated.SAS.txt')
+    'AFR': os.path.join(dirname(dirname(__file__)), 'data', '1kGP.unrelated.AFR.txt'),
+    'AMR': os.path.join(dirname(dirname(__file__)), 'data', '1kGP.unrelated.AMR.txt'),
+    'EAS': os.path.join(dirname(dirname(__file__)), 'data', '1kGP.unrelated.EAS.txt'),
+    'EUR': os.path.join(dirname(dirname(__file__)), 'data', '1kGP.unrelated.EUR.txt'),
+    'SAS': os.path.join(dirname(dirname(__file__)), 'data', '1kGP.unrelated.SAS.txt')
 }
 
 # heterozygous genotype code

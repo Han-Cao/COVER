@@ -29,9 +29,8 @@ for i in {1..22} X; do
     bcftools view \
     -m 2 -M 2 --type snps \
     -S data/1kg.unrelated.txt \
-    -i "MAF_EUR_unrel > 0.01 | MAF_EAS_unrel > 0.01 | MAF_AMR_unrel > 0.01 | MAF_SAS_unrel > 0.01 | MAF_AFR_unrel > 0.01" \
     -Ou data/vcf_raw/1kGP_high_coverage_Illumina.chr${i}.filtered.SNV_INDEL_SV_phased_panel.vcf.gz | \
-    bcftools annotate -x ^INFO/MAF_EUR_unrel,INFO/MAF_EAS_unrel,INFO/MAF_AMR_unrel,INFO/MAF_SAS_unrel,INFO/MAF_AFR_unrel \
+    bcftools annotate -x ^INFO/MAF_EUR_unrel,INFO/MAF_EAS_unrel,INFO/MAF_AMR_unrel,INFO/MAF_SAS_unrel,INFO/MAF_AFR_unrel,INFO/ExcHet_EAS,INFO/ExcHet_EUR,INFO/ExcHet_AMR,INFO/ExcHet_SAS,INFO/ExcHet_AFR \
     -Ob -o data/vcf_raw/1kGP_high_coverage_Illumina.chr${i}.filtered.unrelated.SNV.MAF1.bcf
     echo "data/vcf_raw/1kGP_high_coverage_Illumina.chr${i}.filtered.unrelated.SNV.MAF1.bcf" >> data/vcf_raw/vcf_list.txt
 done

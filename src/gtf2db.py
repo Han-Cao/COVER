@@ -20,7 +20,7 @@ from gtfparse import read_gtf
 
 
 
-def parse_gtf(gtf_file: str):
+def parse_gtf(gtf_file: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Read and parse gtf files"""
     logger = logging.getLogger(__name__)
 
@@ -35,8 +35,19 @@ def parse_gtf(gtf_file: str):
     # transcript table:
     # transcript id, gene id,  gene symbol, coordinate, strand, start codon, stop codon, UTRs, exon list
     df_transcript = df_gtf.loc[df_gtf['feature'] == 'transcript', ['transcript_id', 'gene_id', 'gene_name', 'seqname', 'start', 'end', 'strand']]
+    # drop duplicates
     df_transcript = df_transcript.drop_duplicates(subset=['transcript_id']).reset_index(drop=True)
     logger.info(f'Find {df_transcript.shape[0]} unique transcripts')
+
+    # transcript annotation table
+    # transcript id, transcript_name, transcript_biotype, MANE_select, Canonical, transcript_support_level
+    df_annotation = df_gtf.loc[df_gtf['feature'] == 'transcript', ['transcript_id', 'transcript_name', 'transcript_biotype', 'tag', 'transcript_support_level']]
+    df_annotation['MANE_select'] = df_annotation['tag'].str.contains('MANE_Select')
+    df_annotation['Canonical'] = df_annotation['tag'].str.contains('Ensembl_canonical')
+    # drop tag column
+    df_annotation = df_annotation.drop('tag', axis=1)
+    # drop duplicates
+    df_annotation = df_annotation.drop_duplicates(subset=['transcript_id']).reset_index(drop=True)
 
     # coding region table: transcript id, start codon, stop codon
     df_start_codon = df_gtf.loc[df_gtf['feature'] == 'start_codon', ['transcript_id', 'start', 'end', 'strand']]
@@ -80,20 +91,19 @@ def parse_gtf(gtf_file: str):
     # merge
     df_transcript = df_transcript.merge(df_exon2transcript, how='inner')
 
-
     # exon table: 
     # exon id, transcript id, coordinate, strand
     df_exon = df_gtf.loc[df_gtf['feature'] == 'exon', ['exon_id', 'seqname', 'start', 'end', 'strand']]
     df_exon = df_exon.drop_duplicates(subset='exon_id').reset_index(drop=True)
 
-    return df_transcript, df_exon
+    return df_transcript, df_annotation, df_exon
 
-def create_db(gtf_file, db_file):
+def create_db(gtf_file, db_file) -> None:
     """Create database"""
 
     logger = logging.getLogger(__name__)
     # Parse GTF file
-    df_transcript, df_exon = parse_gtf(gtf_file)
+    df_transcript, df_annotation, df_exon = parse_gtf(gtf_file)
 
     # Create SQLite3 connection and cursor
     logger.info(f'Creating database: {db_file}')
@@ -102,7 +112,7 @@ def create_db(gtf_file, db_file):
     conn = sqlite3.connect(db_file)
     c = conn.cursor()
 
-    # Store df_transcript into database
+    # Write df_transcript into database
     c.execute("""
         CREATE TABLE transcripts (
             transcript_id TEXT PRIMARY KEY,
@@ -118,7 +128,19 @@ def create_db(gtf_file, db_file):
         )""")
     df_transcript.to_sql('transcripts', conn, if_exists='replace', index=False)
 
-    # Create exons_to_transcript table
+    # write df_annotation to database
+    c.execute("""
+        CREATE TABLE annotations (
+            transcript_id TEXT PRIMARY KEY,
+            transcript_name TEXT
+            transcript_biotype TEXT
+            transcript_support_level TEXT
+            MANE_select BOOLEAN
+            Canonical BOOLEAN
+        )""")
+    df_annotation.to_sql('annotations', conn, if_exists='replace', index=False)
+
+    # Write df_exon to database
     c.execute("""
         CREATE TABLE exons (
             exon_id TEXT PRIMARY KEY,

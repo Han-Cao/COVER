@@ -47,15 +47,18 @@ def test_output() -> None:
     conn_truth = sqlite3.connect(os.path.join(TRUTH_DIR, 'Homo_sapiens.GRCh38.110.APP_GFAP.db'))
 
     df_test_transcript = pd.read_sql_query("SELECT * FROM transcripts", conn_test)
+    df_test_annotation = pd.read_sql_query("SELECT * FROM annotations", conn_test)
     df_test_exon = pd.read_sql_query("SELECT * FROM exons", conn_test)
     df_truth_transcript = pd.read_sql_query("SELECT * FROM transcripts", conn_truth)
+    df_truth_annotation = pd.read_sql_query("SELECT * FROM annotations", conn_truth)
     df_truth_exon = pd.read_sql_query("SELECT * FROM exons", conn_truth)
 
     conn_test.close()
     conn_truth.close()
-
+    
     # Compare tables
     pd.testing.assert_frame_equal(df_test_exon, df_truth_exon, check_dtype=False)
+    pd.testing.assert_frame_equal(df_test_annotation, df_truth_annotation, check_dtype=False)
     pd.testing.assert_frame_equal(df_test_transcript, df_truth_transcript, check_dtype=False)
 
     os.remove(os.path.join(OUTPUT_DIR, 'Homo_sapiens.GRCh38.110.APP_GFAP.db'))

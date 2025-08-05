@@ -11,6 +11,7 @@ import sqlite3
 import pandas as pd
 
 # Set up logging
+# gtfparse can overwrite logging config, so set it here
 logging.basicConfig(level=logging.INFO,
                     format='[%(asctime)s] - [%(levelname)s]: %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S')
@@ -132,16 +133,17 @@ def create_db(gtf_file, db_file):
     conn.commit()
     conn.close()
 
-def main():
+def main_gtf2db(args: argparse.Namespace) -> None:
     """Main function"""
+
+    # Create database
+    create_db(args.gtf, args.db)
+
+if __name__ == '__main__':
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Parse GTF files and store into a database')
     parser.add_argument('-g', '--gtf', help='input GTF file')
     parser.add_argument('-d', '--db', help='output SQLite3 database file')
     args = parser.parse_args()
 
-    # Create database
-    create_db(args.gtf, args.db)
-
-if __name__ == '__main__':
-    main()
+    main_gtf2db(args)

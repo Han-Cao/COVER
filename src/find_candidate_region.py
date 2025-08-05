@@ -292,7 +292,7 @@ def query_db(id: str, conn: sqlite3.Connection, max_deletion: int, splice_donor_
 def write_output(x: Transcript, df_target_region: pd.DataFrame, out_prefix: str) -> None:
     # write transcript information
     with open(f'{out_prefix}.summary.txt', 'w') as f:
-        f.write(f"# Transcript information:\n")
+        f.write("# Transcript information:\n")
         f.write(str(x))
         f.write("\n# Exon information:\n")
         f.write(x.exons.to_csv(sep='\t', index=False))
@@ -306,19 +306,8 @@ def write_output(x: Transcript, df_target_region: pd.DataFrame, out_prefix: str)
 
 
 
-def main():
-    """Parse arguments"""
-    parser = argparse.ArgumentParser(description="Find candidate region for deletion")
-    parser.add_argument("-i", "--id", help="Single transcript ID, will output both candidate region table and summary", type=str)
-    parser.add_argument("-l", "--id-list", help="List of transcript IDs to process, will only output candidate region table", type=str)
-    parser.add_argument("-d", "--db", help="SQLite3 database file for GTF", required=True, type=str)
-    parser.add_argument("-o", "--output", help="Output file prefix", required=True, type=str)
-
-    parser.add_argument("-m", "--max-deletion", help="Maximum deletion size (default: 10000)", type=int, default=10000)
-    parser.add_argument("--splice-donor-len", help="Length of splice donor region (default: 10)", type=int, default=10)
-    parser.add_argument("--splice-receptor-len", help="Length of splice receptor region (default: 28)", type=int, default=28)
-    parser.add_argument("--n-before-stop", help="Minimum number of exons before the stop codon to be considered as target (default: 2)", type=int, default=2)
-    args = parser.parse_args()
+def main_find_candidate_region(args: argparse.Namespace) -> None:
+    """Main function"""
 
     # Connect to database
     conn = sqlite3.connect(args.db)
@@ -353,4 +342,16 @@ def main():
         parser.error("Please specify either --id or --id-list")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Find candidate region for deletion")
+    parser.add_argument("-i", "--id", help="Single transcript ID, will output both candidate region table and summary", type=str)
+    parser.add_argument("-l", "--id-list", help="List of transcript IDs to process, will only output candidate region table", type=str)
+    parser.add_argument("-d", "--db", help="SQLite3 database file for GTF", required=True, type=str)
+    parser.add_argument("-o", "--output", help="Output file prefix", required=True, type=str)
+
+    parser.add_argument("-m", "--max-deletion", help="Maximum deletion size (default: 10000)", type=int, default=10000)
+    parser.add_argument("--splice-donor-len", help="Length of splice donor region (default: 10)", type=int, default=10)
+    parser.add_argument("--splice-receptor-len", help="Length of splice receptor region (default: 28)", type=int, default=28)
+    parser.add_argument("--n-before-stop", help="Minimum number of exons before the stop codon to be considered as target (default: 2)", type=int, default=2)
+    args = parser.parse_args()
+
+    main_find_candidate_region(args)

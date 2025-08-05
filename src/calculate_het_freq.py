@@ -398,22 +398,8 @@ def calculate_all_het_freq(df_region: pd.DataFrame,
     return df_het_freq, df_pair_het_freq
 
 
-def main():
+def main_calcualte_het_freq(args: argparse.Namespace) -> None:
     """Main function"""
-    parser = argparse.ArgumentParser(description='Calculate co-heterozygous frequency for SNPs in candidate regions')
-    parser.add_argument('-r', '--region', help='Candidate region file', required=True)
-    parser.add_argument('-v', '--vcf', help='Reference 1000G VCF file', required=True)
-    parser.add_argument('-p', '--pop', help='Population', choices=['AFR', 'AMR', 'EAS', 'EUR', 'SAS'], required=True)
-    parser.add_argument('-o', '--output', help='Output prefix', required=True)
-    parser.add_argument('--index', help='Comma separated index of candidate regions to process (default: all)', type=str, default='all')
-    parser.add_argument('-m', '--maf', help='MAF cutoff (default: 0.05)', type=float, default=0.05)
-    parser.add_argument('--exchet', help='Excess heterozygosity test p-value cutoff (default: 1e-5)', type=float, default=1e-5)
-    parser.add_argument('-d', '--max-deletion', help='Maximum deletion size (default: 10000)', type=int, default=10000)
-    parser.add_argument('--n-pair-max', help='Maximum number of variant pairs to be considered for combinations of two variant pairs (default: 200)', type=int, default=200)
-    parser.add_argument('--pair-het-cutoff', help='Minimum heterozygous frequency to be considered for combinations of two variant pairs (default: 0.1)', type=float, default=0.1)
-    parser.add_argument('--top-n-comb', help='Top N combination of two variant pairs to be output (default: 1000)', type=int, default=1000)
-
-    args = parser.parse_args()
 
     # parse index string
     if args.index == 'all':
@@ -433,4 +419,19 @@ def main():
     df_pair_het_freq.to_csv(f'{args.output}.pair_het_freq.txt', sep='\t', index=False)
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Calculate co-heterozygous frequency for SNPs in candidate regions')
+    parser.add_argument('-r', '--region', help='Candidate region file', required=True)
+    parser.add_argument('-v', '--vcf', help='Reference 1000G VCF file', required=True)
+    parser.add_argument('-p', '--pop', help='Population', choices=['AFR', 'AMR', 'EAS', 'EUR', 'SAS'], required=True)
+    parser.add_argument('-o', '--output', help='Output prefix', required=True)
+    parser.add_argument('--index', help='Comma separated index of candidate regions to process (default: all)', type=str, default='all')
+    parser.add_argument('-m', '--maf', help='MAF cutoff (default: 0.05)', type=float, default=0.05)
+    parser.add_argument('--exchet', help='Excess heterozygosity test p-value cutoff (default: 1e-5)', type=float, default=1e-5)
+    parser.add_argument('-d', '--max-deletion', help='Maximum deletion size (default: 10000)', type=int, default=10000)
+    parser.add_argument('--n-pair-max', help='Maximum number of variant pairs to be considered for combinations of two variant pairs (default: 200)', type=int, default=200)
+    parser.add_argument('--pair-het-cutoff', help='Minimum heterozygous frequency to be considered for combinations of two variant pairs (default: 0.1)', type=float, default=0.1)
+    parser.add_argument('--top-n-comb', help='Top N combination of two variant pairs to be output (default: 1000)', type=int, default=1000)
+
+    args = parser.parse_args()
+    
+    main_calcualte_het_freq(args)

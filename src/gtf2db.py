@@ -132,10 +132,10 @@ def create_db(gtf_file, db_file) -> None:
     c.execute("""
         CREATE TABLE annotations (
             transcript_id TEXT PRIMARY KEY,
-            transcript_name TEXT
-            transcript_biotype TEXT
-            transcript_support_level TEXT
-            MANE_select BOOLEAN
+            transcript_name TEXT,
+            transcript_biotype TEXT,
+            transcript_support_level TEXT,
+            MANE_select BOOLEAN,
             Canonical BOOLEAN
         )""")
     df_annotation.to_sql('annotations', conn, if_exists='replace', index=False)

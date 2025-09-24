@@ -394,6 +394,7 @@ def calculate_all_het_freq(df_region: pd.DataFrame,
         logger.info(f'Calculate co-heterozygous frequency for combinations from {len(co_het_matrix.id)} variant pairs')
         df_pair_het_freq = co_het_matrix.pair_het_table()
         df_pair_het_freq = df_pair_het_freq.sort_values('pair_het_freq', ascending=False).reset_index(drop=True).iloc[:top_n_comb, :]
+        df_pair_het_freq['population'] = pop
 
     return df_het_freq, df_pair_het_freq
 

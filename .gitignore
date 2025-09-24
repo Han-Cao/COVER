@@ -2,3 +2,4 @@ __pycache__
 *db
 *gtf.gz
 !tests/truth/*
+*bcf*

@@ -8,6 +8,7 @@
    - [Input](#input)
    - [Output](#output)
    - [Parameters](#parameters)
+5. [COVER API](#cover-api)
 
 ## Overview
 
@@ -67,7 +68,7 @@ python src/run_all_het.py \
 
 ### Parameters
 ```
-run_all_het.py 
+run_all_het.py
 
 options:
   -d DB, --db DB        SQLite3 database file for GTF
@@ -98,4 +99,18 @@ options:
                         Minimum heterozygous frequency to be considered for combinations of two variant pairs (default: 0.1)
   --top-n-comb TOP_N_COMB
                         Top N combination of two variant pairs to be output (default: 10)
+```
+
+## COVER API
+
+The COVER API provides REST endpoints for querying transcript databases and finding candidate regions programmatically.
+
+Install additional dependencies for the API:
+```
+pip install fastapi uvicorn
+```
+
+Start the API server:
+```
+python src/cover_api.py --database data/Homo_sapiens.GRCh38.110.db --vcf data/1kGP_high_coverage_Illumina.filtered.unrelated.SNV.MAF1.bcf --port 8000 --host 127.0.0.1
 ```

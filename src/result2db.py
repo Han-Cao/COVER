@@ -26,7 +26,7 @@ def create_tables(conn: sqlite3.Connection) -> None:
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         transcript_id TEXT NOT NULL,
         gene_id TEXT NOT NULL,
-        gene_name TEXT NOT NULL,
+        gene_name TEXT,
         variant1 TEXT NOT NULL,
         variant1_region TEXT NOT NULL,
         variant2 TEXT NOT NULL,
@@ -72,31 +72,6 @@ def load_het_freq_data(file_path: str) -> pd.DataFrame:
     logging.info(f"Loaded {len(df)} records from {file_path}")
     return df
 
-def insert_het_freq_data(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
-    """Insert heterozygous frequency data into database"""
-    cursor = conn.cursor()
-
-    inserted_count = 0
-    for _, row in df.iterrows():
-        cursor.execute("""
-        INSERT INTO het_freq (
-            transcript_id, gene_id, gene_name, variant1, variant1_region,
-            variant2, variant2_region, distance, target, consequence,
-            population, cis_het_freq, trans_het_freq, max_het_freq, target_genotype
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            row['transcript_id'], row['gene_id'], row['gene_name'],
-            row['variant1'], row['variant1_region'], row['variant2'],
-            row['variant2_region'], int(row['distance']), row['target'],
-            row['consequence'], row['population'], float(row['cis_het_freq']),
-            float(row['trans_het_freq']), float(row['max_het_freq']), row['target_genotype']
-        ))
-        inserted_count += 1
-
-    conn.commit()
-    logging.info(f"Inserted {inserted_count} records into het_freq table")
-    return inserted_count
-
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description="Save heterozygous frequency analysis results to database")
@@ -132,17 +107,11 @@ def main():
         # Process het_freq file
         try:
             het_freq_df = load_het_freq_data(args.het_freq_file)
-            insert_het_freq_data(conn, het_freq_df)
+            het_freq_df.to_sql("het_freq", conn, if_exists="replace", index=False)
         except Exception as e:
             logging.error(f"Error processing het_freq file: {e}")
 
-        # Show summary
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM het_freq")
-        het_freq_count = cursor.fetchone()[0]
-
         logging.info("Database population complete!")
-        logging.info(f"het_freq table: {het_freq_count} records")
 
     except Exception as e:
         logging.error(f"Error: {e}")

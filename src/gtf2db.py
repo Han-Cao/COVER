@@ -126,7 +126,9 @@ def create_db(gtf_file, db_file) -> None:
             stop_end INTEGER,
             exon_list TEXT
         )""")
-    df_transcript.to_sql('transcripts', conn, if_exists='replace', index=False)
+    df_transcript.to_sql('transcripts', conn, if_exists='append', index=False)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_gene_id ON transcripts(gene_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_gene_name ON transcripts(gene_name)")
 
     # write df_annotation to database
     c.execute("""
@@ -138,7 +140,8 @@ def create_db(gtf_file, db_file) -> None:
             MANE_select BOOLEAN,
             Canonical BOOLEAN
         )""")
-    df_annotation.to_sql('annotations', conn, if_exists='replace', index=False)
+    df_annotation.to_sql('annotations', conn, if_exists='append', index=False)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_annotations_transcript_name ON annotations(transcript_name)")
 
     # Write df_exon to database
     c.execute("""
@@ -149,7 +152,7 @@ def create_db(gtf_file, db_file) -> None:
             end INTEGER,
             strand TEXT
         )""")
-    df_exon.to_sql('exons', conn, if_exists='replace', index=False)
+    df_exon.to_sql('exons', conn, if_exists='append', index=False)
 
     # Commit changes and close connection
     conn.commit()

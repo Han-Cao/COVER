@@ -45,8 +45,10 @@ def create_tables(conn: sqlite3.Connection) -> None:
 
     # Create indexes for better query performance
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_het_freq_transcript ON het_freq(transcript_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_het_freq_gene ON het_freq(gene_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_het_freq_population ON het_freq(population)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_het_freq_gene_id ON het_freq(gene_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_het_freq_gene_name ON het_freq(gene_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_het_freq_variant1 ON het_freq(variant1)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_het_freq_variant2 ON het_freq(variant2)")
 
     conn.commit()
     logging.info("Database table created successfully")
@@ -107,7 +109,7 @@ def main():
         # Process het_freq file
         try:
             het_freq_df = load_het_freq_data(args.het_freq_file)
-            het_freq_df.to_sql("het_freq", conn, if_exists="replace", index=False)
+            het_freq_df.to_sql("het_freq", conn, if_exists="append", index=False)
         except Exception as e:
             logging.error(f"Error processing het_freq file: {e}")
 

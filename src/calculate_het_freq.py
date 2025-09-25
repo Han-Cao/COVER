@@ -399,7 +399,7 @@ def calculate_all_het_freq(df_region: pd.DataFrame,
     return df_het_freq, df_pair_het_freq
 
 
-def main_calcualte_het_freq(args: argparse.Namespace) -> None:
+def main_calculate_het_freq(args: argparse.Namespace) -> None:
     """Main function"""
 
     # parse index string
@@ -435,4 +435,4 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     
-    main_calcualte_het_freq(args)
+    main_calculate_het_freq(args)

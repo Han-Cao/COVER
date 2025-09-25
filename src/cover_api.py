@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 
 """
-FastAPI backend for COVER - COding Variant Effect pRediction
-Provides API endpoints for querying transcript databases and finding candidate regions.
+FastAPI backend for COVER.
 """
 
 import argparse
+import hashlib
 import logging
 import os
+import shutil
 import sqlite3
 import tempfile
-from typing import List, Optional, Union, Dict, Any
+import time
+from typing import List, Optional, Union, Dict, Any, Tuple
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
@@ -18,7 +20,7 @@ from pydantic import BaseModel, Field
 
 # Import local modules
 from find_candidate_region import main_find_candidate_region
-from calculate_het_freq import main_calcualte_het_freq
+from calculate_het_freq import main_calculate_het_freq
 
 # Set up logging
 logging.basicConfig(
@@ -28,10 +30,255 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global database paths - will be set when starting the server
-TX_DATABASE_PATH: Optional[str] = None  # Transcript database
-RESULTS_DATABASE_PATH: Optional[str] = None  # Results database with het_freq table
-VCF_FILE_PATH: Optional[str] = None
+
+# Global database and VCF file paths
+TX_DATABASE_PATH = None
+RESULTS_DATABASE_PATH = None
+VCF_FILE_PATH = None
+
+# Cache directory for storing temporary results
+CACHE_DIR = os.path.join(tempfile.gettempdir(), 'cover_cache')
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+# Cache expiration time in seconds (1 hour)
+CACHE_EXPIRATION = 3600
+
+# Global counter for cache cleanup
+CACHE_CLEANUP_COUNTER = 0
+CLEANUP_THRESHOLD = 100
+
+def create_cache_key(params: Dict[str, Any], endpoint_name: str) -> str:
+    """Create a cache key from parameters dictionary using hash for filesystem safety"""
+    # Sort parameters to ensure consistent cache keys
+    sorted_params = sorted(params.items())
+
+    # Create a string representation
+    param_str = f"{endpoint_name}:{','.join(f'{k}={v}' for k, v in sorted_params)}"
+
+    # Create hash for filesystem-safe key
+    cache_hash = hashlib.md5(param_str.encode()).hexdigest()
+    return cache_hash
+
+def get_cache_path(cache_key: str, endpoint_name: str) -> str:
+    """Get the cache directory path for a given cache key and endpoint"""
+    return os.path.join(CACHE_DIR, endpoint_name, cache_key)
+
+def is_cache_valid(cache_path: str) -> bool:
+    """Check if cache exists and is not expired"""
+    if not os.path.exists(cache_path):
+        return False
+
+    # Check if cache is expired
+    cache_age = time.time() - os.path.getmtime(cache_path)
+    return cache_age < CACHE_EXPIRATION
+
+def load_cached_results(cache_path: str, result_files: Dict[str, str]) -> Dict[str, Any]:
+    """Load cached results from files"""
+    results = {}
+
+    for file_key, filename in result_files.items():
+        file_path = os.path.join(cache_path, filename)
+        logger.debug(f"Loading cached file: {file_path} -> exists: {os.path.exists(file_path)}")
+        if os.path.exists(file_path):
+            # Handle missing_transcript.txt files differently (text format, no header)
+            if filename.endswith('missing_transcript.txt'):
+                try:
+                    with open(file_path, 'r') as f:
+                        content = f.read().strip()
+                        if content:
+                            results[file_key] = [line.strip() for line in content.split('\n') if line.strip()]
+                        else:
+                            results[file_key] = []  # Empty list for empty file
+                    logger.debug(f"Loaded {len(results[file_key])} missing transcripts from {filename}")
+                except Exception as e:
+                    logger.warning(f"Error reading missing transcript file {file_path}: {e}")
+                    results[file_key] = []
+            else:
+                # All other cached files are TSV format, read with pandas
+                try:
+                    df = pd.read_csv(file_path, sep='\t')
+                    results[file_key] = df.to_dict('records')
+                    logger.debug(f"Loaded {len(results[file_key])} records from {filename}")
+                except Exception as e:
+                    logger.warning(f"Error parsing cached CSV file {file_path}: {e}")
+                    results[file_key] = []
+        else:
+            # All cached files should exist, so warn if any are missing
+            logger.warning(f"Cached file not found: {file_path}")
+            results[file_key] = None
+
+    return results
+
+def initialize_pagination_params(page_limit: Optional[int] = None, page_no: Optional[int] = None) -> Tuple[int, int]:
+    """
+    Initialize pagination parameters
+    """
+    
+    # Set default values for pagination
+    page_limit = page_limit if page_limit is not None else 20
+    page_no = page_no if page_no is not None else 1
+
+    # Ensure page_limit is positive
+    if page_limit <= 0:
+        raise HTTPException(status_code=400, detail="page_limit must be greater than 0")
+
+    # Ensure page_no is positive
+    if page_no <= 0:
+        raise HTTPException(status_code=400, detail="page_no must be greater than 0")
+    
+    return page_limit, page_no
+
+def get_pagination_info(all_results: List[Dict], page_limit: Optional[int] = None, page_no: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Calculate pagination information and return paginated results.
+
+    Args:
+        all_results: List of all results
+        page_limit: Maximum number of results per page (default: 20)
+        page_no: Page number to retrieve (1-indexed, default: 1)
+
+    Returns:
+        Dict containing pagination info and paginated results
+
+    Raises:
+        HTTPException: If pagination parameters are invalid
+    """
+
+    total_count = len(all_results) if all_results else 0
+    total_pages = (total_count + page_limit - 1) // page_limit  # Ceiling division
+    start_idx = (page_no - 1) * page_limit
+    end_idx = start_idx + page_limit
+
+    # Get paginated results
+    paginated_results = all_results[start_idx:end_idx] if all_results else []
+
+    return {
+        'results': paginated_results,
+        'total_count': total_count,
+        'page_no': page_no,
+        'page_limit': page_limit,
+        'total_pages': total_pages
+    }
+
+def cleanup_expired_cache():
+    """Clean up expired cache directories when counter reaches threshold"""
+    global CACHE_CLEANUP_COUNTER
+    CACHE_CLEANUP_COUNTER = 0  # Reset counter after cleanup
+
+    try:
+        current_time = time.time()
+        for endpoint_dir in os.listdir(CACHE_DIR):
+            endpoint_path = os.path.join(CACHE_DIR, endpoint_dir)
+            if os.path.isdir(endpoint_path):
+                for cache_item in os.listdir(endpoint_path):
+                    cache_item_path = os.path.join(endpoint_path, cache_item)
+                    if os.path.isdir(cache_item_path):
+                        item_age = current_time - os.path.getmtime(cache_item_path)
+                        if item_age > CACHE_EXPIRATION:
+                            shutil.rmtree(cache_item_path)
+                            logger.info(f"Cleaned up expired cache: {endpoint_dir}/{cache_item}")
+    except Exception as e:
+        logger.warning(f"Error cleaning up cache: {str(e)}")
+
+def increment_cleanup_counter():
+    """Increment cleanup counter and trigger cleanup if threshold reached"""
+    global CACHE_CLEANUP_COUNTER
+    CACHE_CLEANUP_COUNTER += 1
+
+    if CACHE_CLEANUP_COUNTER >= CLEANUP_THRESHOLD:
+        cleanup_expired_cache()
+
+def run_het_freq_calculation(
+    regions: List[Dict[str, Any]],
+    population: str,
+    cache_key: str,
+    cache_path: str,
+    pair_het_cutoff: float,
+    top_n_comb: int = 1000,
+    output_file_suffix: str = "het_freq.het_freq.txt",
+    process_pair_results: bool = False
+) -> List[Dict[str, Any]]:
+    """
+    Shared function to process regions and calculate heterozygous frequencies.
+
+    Args:
+        regions: List of region dictionaries
+        population: Population to analyze
+        cache_key: Cache key for this operation
+        cache_path: Cache path for this operation
+        pair_het_cutoff: Cutoff for pair heterozygous frequency
+        top_n_comb: Top N combinations to output (default: 1000)
+        output_file_suffix: Suffix for output file to read
+        process_pair_results: Whether to process pair results (step4) or single results (step3)
+
+    Returns:
+        List of processed results
+    """
+    logger.info(f"Computing heterozygous frequencies for cache key: {cache_key}")
+
+    # Create cache directory first
+    os.makedirs(cache_path, exist_ok=True)
+
+    # Create temporary file for regions data
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as temp_regions:
+        # Convert regions list to DataFrame and write to temp file
+        df_regions = pd.DataFrame(regions)
+        df_regions.to_csv(temp_regions.name, sep='\t', index=False)
+        regions_file = temp_regions.name
+
+    try:
+        # Write directly to cache directory
+        output_prefix = os.path.join(cache_path, 'het_freq' if not process_pair_results else 'pair_het_freq')
+
+        # Create arguments namespace for main_calculate_het_freq
+        args = argparse.Namespace(
+            region=regions_file,
+            vcf=VCF_FILE_PATH,  # Use global VCF file path
+            pop=population,
+            output=output_prefix,
+            index='all',
+            maf=0.05,  # Default MAF
+            exchet=1e-5,  # Default excess heterozygosity cutoff
+            max_deletion=10000,  # Default max deletion
+            n_pair_max=200,  # Default n_pair_max
+            pair_het_cutoff=pair_het_cutoff,
+            top_n_comb=top_n_comb
+        )
+
+        # Run the main function
+        main_calculate_het_freq(args)
+
+        # Read the output file
+        output_file = f"{output_prefix}.{output_file_suffix}"
+
+        all_results = []
+        if os.path.exists(output_file):
+            df_results = pd.read_csv(output_file, sep='\t')
+
+            # Add transcript_id, gene_id, and gene_name from the first region in the request
+            first_region = regions[0] if regions else {}
+            transcript_id = first_region.get('transcript_id', '')
+            gene_id = first_region.get('gene_id', '')
+            gene_name = first_region.get('gene_name', '')
+
+            # Add these fields to each row before creating records
+            df_results['transcript_id'] = transcript_id
+            df_results['gene_id'] = gene_id
+            df_results['gene_name'] = gene_name
+
+            # For step3, remove population column since it's in the response
+            if not process_pair_results and 'population' in df_results.columns:
+                df_results = df_results.drop(columns=['population'])
+
+            all_results = df_results.to_dict('records')
+        else:
+            logger.warning(f"Output file not found: {output_file}")
+
+    finally:
+        # Clean up temporary regions file
+        os.unlink(regions_file)
+
+    return all_results
 
 # FastAPI app instance
 app = FastAPI(
@@ -62,12 +309,16 @@ class ResultsRequest(BaseModel):
     gene_id: Optional[str] = Field(None, description="Gene ID to filter by")
     transcript_id: Optional[str] = Field(None, description="Transcript ID to filter by")
     variant_id: Optional[str] = Field(None, description="Variant ID to filter by (searches both variant1 and variant2)")
-    limit: Optional[int] = Field(100, description="Maximum number of results to return")
+    page_limit: Optional[int] = Field(20, description="Maximum number of results per page")
+    page_no: Optional[int] = Field(1, description="Page number to retrieve (starting from 1)")
 
 class ResultsResponse(BaseModel):
     """Response model for analysis results queries"""
     results: List[HetFreqRecord]
     total_count: int
+    page_no: int
+    page_limit: int
+    total_pages: int
 
 # Pydantic models for request/response validation
 class TranscriptRequest(BaseModel):
@@ -78,6 +329,7 @@ class TranscriptRequest(BaseModel):
 
 class TranscriptRecord(BaseModel):
     """Model for transcript record"""
+    transcript_no: int
     transcript_id: str
     gene_id: str
     gene_name: str
@@ -110,6 +362,8 @@ class RegionRequest(BaseModel):
     splice_donor_len: Optional[int] = Field(10, description="Length of splice donor region")
     splice_receptor_len: Optional[int] = Field(28, description="Length of splice receptor region")
     n_before_stop: Optional[int] = Field(2, description="Minimum number of exons before stop codon")
+    page_limit: Optional[int] = Field(20, description="Maximum number of results per page")
+    page_no: Optional[int] = Field(1, description="Page number to retrieve (starting from 1)")
 
 class RegionRecord(BaseModel):
     """Model for region record"""
@@ -147,6 +401,8 @@ class HetFreqRequest(BaseModel):
     maf: Optional[float] = Field(0.05, description="MAF cutoff")
     exc_het: Optional[float] = Field(1e-5, description="Excess heterozygosity test p-value cutoff")
     n_pair_max: Optional[int] = Field(200, description="Maximum number of variant pairs to consider")
+    page_limit: Optional[int] = Field(20, description="Maximum number of results per page")
+    page_no: Optional[int] = Field(1, description="Page number to retrieve (starting from 1)")
 
 class PairHetFreqRequest(BaseModel):
     """Request model for pair heterozygous frequency calculation"""
@@ -158,23 +414,34 @@ class PairHetFreqRequest(BaseModel):
     exc_het: Optional[float] = Field(1e-5, description="Excess heterozygosity test p-value cutoff")
     n_pair_max: Optional[int] = Field(200, description="Maximum number of variant pairs to consider")
     top_n_comb: Optional[int] = Field(1000, description="Top N combinations to output")
+    page_limit: Optional[int] = Field(20, description="Maximum number of results per page")
+    page_no: Optional[int] = Field(1, description="Page number to retrieve (starting from 1)")
 
 class RegionResponse(BaseModel):
     """Response model for candidate regions"""
     results: List[RegionRecord]
     total_count: int
+    page_no: int
+    page_limit: int
+    total_pages: int
     missing_transcripts: Optional[List[str]] = None
 
 class HetFreqResponse(BaseModel):
     """Response model for heterozygous frequency results"""
     results: List[HetFreqRecord]
     total_count: int
+    page_no: int
+    page_limit: int
+    total_pages: int
     population: str
 
 class PairHetFreqResponse(BaseModel):
     """Response model for pair heterozygous frequency results"""
     results: List[PairHetFreqRecord]
     total_count: int
+    page_no: int
+    page_limit: int
+    total_pages: int
 
 # Dependency to get database connection
 def get_db_connection() -> sqlite3.Connection:
@@ -214,11 +481,11 @@ async def root():
         "message": "COVER API",
         "version": "0.1.0",
         "endpoints": {
-            "/query_transcript": "Query database by gene_id or gene_name (TranscriptRequest/TranscriptResponse)",
             "/query_results": "Query het_freq results by gene_id, transcript_id, or variant_id (ResultsRequest/ResultsResponse)",
-            "/get_region": "Find candidate regions for transcript IDs (RegionRequest/RegionResponse)",
-            "/get_het_freq": "Calculate heterozygous frequencies for SNP pairs (HetFreqRequest/HetFreqResponse)",
-            "/get_pair_het_freq": "Calculate pair heterozygous frequencies for combinations (PairHetFreqRequest/PairHetFreqResponse)",
+            "/step1": "Query database by gene_id or gene_name (TranscriptRequest/TranscriptResponse)",
+            "/step2": "Find candidate regions for transcript IDs (RegionRequest/RegionResponse)",
+            "/step3": "Calculate heterozygous frequencies for SNP pairs (HetFreqRequest/HetFreqResponse)",
+            "/step4": "Calculate pair heterozygous frequencies for combinations (PairHetFreqRequest/PairHetFreqResponse)",
             "/health": "Health check endpoint"
         }
     }
@@ -276,7 +543,7 @@ async def query_results(request: ResultsRequest):
         "gene_id": "ENSG00000142192", "transcript_id": "ENST00000354192", "variant_id": "chr21:26161857:T:G"
 
     Returns:
-        ResultsResponse containing filtered heterozygous frequency results
+        ResultsResponse containing filtered heterozygous frequency results with pagination
     """
     conn = None
     try:
@@ -289,6 +556,9 @@ async def query_results(request: ResultsRequest):
                 status_code=400,
                 detail="At least one of gene_id, transcript_id, or variant_id must be provided"
             )
+
+        # Initialize pagination parameters
+        page_limit, page_no = initialize_pagination_params(request.page_limit, request.page_no)
 
         # Build query conditions
         conditions = []
@@ -308,16 +578,30 @@ async def query_results(request: ResultsRequest):
 
         where_clause = " AND ".join(conditions)
 
-        # Query het_freq data with filters
+        # Get total count for pagination
+        count_query = f"""
+        SELECT COUNT(*) as total_count
+        FROM het_freq
+        WHERE {where_clause}
+        """
+        df_count = pd.read_sql(count_query, conn, params=params)
+        total_count = df_count.iloc[0]['total_count'] if not df_count.empty else 0
+
+        # Calculate pagination values
+        total_pages = (total_count + page_limit - 1) // page_limit  # Ceiling division
+        offset = (page_no - 1) * page_limit
+
+        # Query het_freq data with pagination
         query = f"""
         SELECT transcript_id, gene_id, gene_name, variant1, variant1_region,
                variant2, variant2_region, distance, target, consequence,
                cis_het_freq, trans_het_freq, max_het_freq, target_genotype
         FROM het_freq
         WHERE {where_clause}
-        LIMIT ?
+        LIMIT ? OFFSET ?
         """
-        params.append(request.limit)
+        params.append(page_limit)
+        params.append(offset)
 
         df_results = pd.read_sql(query, conn, params=params)
 
@@ -348,7 +632,10 @@ async def query_results(request: ResultsRequest):
 
         return ResultsResponse(
             results=results,
-            total_count=len(results)
+            total_count=total_count,
+            page_no=page_no,
+            page_limit=page_limit,
+            total_pages=total_pages
         )
 
     except Exception as e:
@@ -402,7 +689,8 @@ async def query_transcript(request: TranscriptRequest):
 
         # Query merged transcript and annotation data (including exon_list for processing)
         transcript_query = f"""
-        SELECT t.transcript_id, t.gene_id, t.gene_name, t.exon_list,
+        SELECT ROW_NUMBER() OVER () as transcript_no,
+               t.transcript_id, t.gene_id, t.gene_name, t.exon_list,
                a.transcript_name, a.transcript_biotype, a.transcript_support_level,
                a.MANE_select, a.Canonical
         FROM transcripts t
@@ -472,13 +760,15 @@ async def query_transcript(request: TranscriptRequest):
 @app.post("/step2", response_model=RegionResponse)
 async def get_candidate_regions(request: RegionRequest):
     """
-    Find candidate regions for given transcript_id(s).
-    
+    Find candidate regions for given transcript_id(s) with pagination support.
+
+    Results are computed once and cached for subsequent pagination requests.
+
     Example usage:
         "transcript_ids": ["ENST00000354192", "ENST00000348990"]
-    
+
     Returns:
-        RegionResponse containing candidate regions as JSON
+        RegionResponse containing paginated candidate regions as JSON
     """
     try:
         # Normalize transcript_ids to list
@@ -486,18 +776,72 @@ async def get_candidate_regions(request: RegionRequest):
             transcript_ids = [request.transcript_ids]
         else:
             transcript_ids = request.transcript_ids
-        
+
         if not transcript_ids:
             raise HTTPException(status_code=400, detail="At least one transcript_id must be provided")
-        
-        # Create temporary files for input and output
+
+        # Initialize pagination parameters
+        page_limit, page_no = initialize_pagination_params(request.page_limit, request.page_no)
+
+        # Increment cleanup counter for cache management
+        increment_cleanup_counter()
+
+        # Create cache key based on transcript_ids and parameters
+        cache_params = {
+            'transcript_ids': sorted(transcript_ids),
+            'max_deletion': request.max_deletion,
+            'splice_donor_len': request.splice_donor_len,
+            'splice_receptor_len': request.splice_receptor_len,
+            'n_before_stop': request.n_before_stop
+        }
+        cache_key = create_cache_key(cache_params, 'step2')
+        cache_path = get_cache_path(cache_key, 'step2')
+
+        logger.debug(f"Cache key: {cache_key}")
+        logger.debug(f"Cache path: {cache_path}")
+        logger.debug(f"Cache valid: {is_cache_valid(cache_path)}")
+
+        # Check if results are already cached
+        if is_cache_valid(cache_path):
+            logger.info(f"Using cached results for cache key: {cache_key}")
+
+            cached_results = load_cached_results(cache_path, {
+                'results': 'candidate_regions.candidate_region.txt',
+                'missing_transcripts': 'candidate_regions.missing_transcript.txt'
+            })
+
+            all_results = cached_results.get('results', [])
+            missing_transcripts = cached_results.get('missing_transcripts')
+
+            # Use the common pagination function (handles defaults and validation)
+            pagination_info = get_pagination_info(all_results, page_limit, page_no)
+
+            logger.debug(f"Returning {len(pagination_info['results'])} results for page {page_no}")
+
+            return RegionResponse(
+                results=pagination_info['results'],
+                total_count=pagination_info['total_count'],
+                page_no=pagination_info['page_no'],
+                page_limit=pagination_info['page_limit'],
+                total_pages=pagination_info['total_pages'],
+                missing_transcripts=missing_transcripts
+            )
+
+        # Results not cached, need to compute them
+        logger.info(f"Computing candidate regions for cache key: {cache_key}")
+
+        # Create cache directory first
+        os.makedirs(cache_path, exist_ok=True)
+
+        # Create temporary file for input
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as temp_input:
             temp_input.write('\n'.join(transcript_ids))
             temp_input_path = temp_input.name
-        
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_prefix = os.path.join(temp_dir, 'candidate_regions')
-            
+
+        try:
+            # Write directly to cache directory
+            output_prefix = os.path.join(cache_path, 'candidate_regions')
+
             # Create arguments namespace for main_find_candidate_region
             args = argparse.Namespace(
                 id=None,  # Using id_list instead
@@ -509,36 +853,53 @@ async def get_candidate_regions(request: RegionRequest):
                 splice_receptor_len=request.splice_receptor_len,
                 n_before_stop=request.n_before_stop
             )
-            
+
             # Run the main function
             main_find_candidate_region(args)
-            
-            # Read the output files
+
+            # Read the output files directly from cache
             candidate_file = f"{output_prefix}.candidate_region.txt"
             missing_file = f"{output_prefix}.missing_transcript.txt"
-            
-            results = []
+
+            all_results = []
             missing_transcripts = None
-            
+
             # Read candidate regions if file exists
             if os.path.exists(candidate_file):
                 df_results = pd.read_csv(candidate_file, sep='\t')
-                results = [RegionRecord(**row) for row in df_results.to_dict('records')]
-            
+                all_results = [RegionRecord(**row) for row in df_results.to_dict('records')]
+            else:
+                logger.warning(f"Candidate file not found: {candidate_file}")
+
             # Read missing transcripts if file exists
             if os.path.exists(missing_file):
                 with open(missing_file, 'r') as f:
-                    missing_transcripts = [line.strip() for line in f if line.strip()]
-        
-        # Clean up temporary input file
-        os.unlink(temp_input_path)
-        
+                    content = f.read().strip()
+                    if content:
+                        missing_transcripts = [line.strip() for line in content.split('\n') if line.strip()]
+                    else:
+                        missing_transcripts = []  # Empty list for empty file
+            else:
+                logger.debug(f"Missing file not found: {missing_file} (this is normal)")
+
+        finally:
+            # Clean up temporary input file
+            os.unlink(temp_input_path)
+
+        # Use the common pagination function
+        pagination_info = get_pagination_info(all_results, page_limit, page_no)
+
+        logger.debug(f"Returning {len(pagination_info['results'])} results for page {page_no} from computation")
+
         return RegionResponse(
-            results=results,
-            total_count=len(results),
+            results=pagination_info['results'],
+            total_count=pagination_info['total_count'],
+            page_no=pagination_info['page_no'],
+            page_limit=pagination_info['page_limit'],
+            total_pages=pagination_info['total_pages'],
             missing_transcripts=missing_transcripts
         )
-        
+
     except Exception as e:
         logger.error(f"Error in get_candidate_regions: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Region analysis failed: {str(e)}")
@@ -546,7 +907,9 @@ async def get_candidate_regions(request: RegionRequest):
 @app.post("/step3", response_model=HetFreqResponse)
 async def get_heterozygous_frequencies(request: HetFreqRequest):
     """
-    Calculate heterozygous frequencies for SNP pairs in candidate regions.
+    Calculate heterozygous frequencies for SNP pairs in candidate regions with pagination support.
+
+    Results are computed once and cached for subsequent pagination requests.
     This function sets pair_het_cutoff to 1 to skip pair calculations and only return df_het_freq.
 
     Example usage:
@@ -570,9 +933,8 @@ async def get_heterozygous_frequencies(request: HetFreqRequest):
         ],
         "population": "EUR"
 
-
     Returns:
-        HetFreqResponse containing heterozygous frequency results as JSON
+        HetFreqResponse containing paginated heterozygous frequency results as JSON
     """
     # Validate VCF file is configured
     if VCF_FILE_PATH is None:
@@ -581,65 +943,99 @@ async def get_heterozygous_frequencies(request: HetFreqRequest):
         raise HTTPException(status_code=500, detail=f"VCF file not found: {VCF_FILE_PATH}")
 
     try:
-        # Create temporary file for regions data
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as temp_regions:
-            # Convert regions list to DataFrame and write to temp file
-            df_regions = pd.DataFrame(request.regions)
-            df_regions.to_csv(temp_regions.name, sep='\t', index=False)
-            regions_file = temp_regions.name
+        # Validate input
+        if not request.regions:
+            raise HTTPException(status_code=400, detail="At least one region must be provided")
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_prefix = os.path.join(temp_dir, 'het_freq')
+        # Initialize pagination parameters
+        page_limit, page_no = initialize_pagination_params(request.page_limit, request.page_no)
 
-            # Create arguments namespace for main_calculate_het_freq
-            args = argparse.Namespace(
-                region=regions_file,
-                vcf=VCF_FILE_PATH,  # Use global VCF file path
-                pop=request.population,
-                output=output_prefix,
-                index='all',
-                maf=request.maf,
-                exchet=request.exc_het,
-                max_deletion=request.max_deletion,
-                n_pair_max=request.n_pair_max,
-                pair_het_cutoff=1.0,  # Force to 1 to skip pair calculations
-                top_n_comb=1000
-            )
+        # Increment cleanup counter for cache management
+        increment_cleanup_counter()
 
-            # Run the main function
-            main_calcualte_het_freq(args)
+        # Create cache key based on regions and parameters
+        cache_params = {
+            'regions': sorted([str(region) for region in request.regions]),  # Convert regions to strings for hashing
+            'population': request.population,
+            'max_deletion': request.max_deletion,
+            'maf': request.maf,
+            'exc_het': request.exc_het,
+            'n_pair_max': request.n_pair_max
+        }
+        cache_key = create_cache_key(cache_params, 'step3')
+        cache_path = get_cache_path(cache_key, 'step3')
 
-            # Read the output file
-            het_freq_file = f"{output_prefix}.het_freq.txt"
+        logger.debug(f"Cache key: {cache_key}")
+        logger.debug(f"Cache path: {cache_path}")
+        logger.debug(f"Cache valid: {is_cache_valid(cache_path)}")
 
-            results = []
-            if os.path.exists(het_freq_file):
-                df_results = pd.read_csv(het_freq_file, sep='\t')
-                # Add transcript_id, gene_id, and gene_name from the first region in the request
+        # Check if results are already cached
+        if is_cache_valid(cache_path):
+            logger.info(f"Using cached results for cache key: {cache_key}")
+
+            cached_results = load_cached_results(cache_path, {
+                'results': 'het_freq.het_freq.txt'
+            })
+
+            all_results = cached_results.get('results', [])
+            total_count = len(all_results) if all_results else 0
+
+            logger.debug(f"Cached results count: {total_count}")
+
+            # Add transcript_id, gene_id, and gene_name from the first region in the request
+            if all_results:
                 first_region = request.regions[0] if request.regions else {}
                 transcript_id = first_region.get('transcript_id', '')
                 gene_id = first_region.get('gene_id', '')
                 gene_name = first_region.get('gene_name', '')
-                
-                # Add these fields to each row before creating records
-                df_results['transcript_id'] = transcript_id
-                df_results['gene_id'] = gene_id
-                df_results['gene_name'] = gene_name
-                
-                # Remove population from records since it's now in the response
-                if 'population' in df_results.columns:
-                    df_results = df_results.drop(columns=['population'])
-                
-                results = [HetFreqRecord(**row) for row in df_results.to_dict('records')]
-            else:
-                logger.warning(f"Output file not found: {het_freq_file}")
 
-        # Clean up temporary regions file
-        os.unlink(regions_file)
+                # Add these fields to each cached result
+                for result in all_results:
+                    result['transcript_id'] = transcript_id
+                    result['gene_id'] = gene_id
+                    result['gene_name'] = gene_name
+
+                # Remove population from records since it's now in the response
+                if 'population' in all_results[0] if all_results else False:
+                    all_results = [{k: v for k, v in result.items() if k != 'population'} for result in all_results]
+
+            # Use the common pagination function
+            pagination_info = get_pagination_info(all_results, page_limit, page_no)
+
+            logger.debug(f"Returning {len(pagination_info['results'])} results for page {page_no}")
+
+            return HetFreqResponse(
+                results=pagination_info['results'],
+                total_count=pagination_info['total_count'],
+                page_no=pagination_info['page_no'],
+                page_limit=pagination_info['page_limit'],
+                total_pages=pagination_info['total_pages'],
+                population=request.population
+            )
+
+        # Results not cached, use shared function to compute them
+        all_results = run_het_freq_calculation(
+            regions=request.regions,
+            population=request.population,
+            cache_key=cache_key,
+            cache_path=cache_path,
+            pair_het_cutoff=1.0,  # Force to 1 to skip pair calculations
+            top_n_comb=1000,
+            output_file_suffix="het_freq.txt",
+            process_pair_results=False
+        )
+
+        # Use the common pagination function
+        pagination_info = get_pagination_info(all_results, page_limit, page_no)
+
+        logger.debug(f"Returning {len(pagination_info['results'])} results for page {page_no} from computation")
 
         return HetFreqResponse(
-            results=results,
-            total_count=len(results),
+            results=pagination_info['results'],
+            total_count=pagination_info['total_count'],
+            page_no=pagination_info['page_no'],
+            page_limit=pagination_info['page_limit'],
+            total_pages=pagination_info['total_pages'],
             population=request.population
         )
 
@@ -684,61 +1080,96 @@ async def get_pair_heterozygous_frequencies(request: PairHetFreqRequest):
         raise HTTPException(status_code=500, detail=f"VCF file not found: {VCF_FILE_PATH}")
 
     try:
-        # Create temporary file for regions data
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as temp_regions:
-            # Convert regions list to DataFrame and write to temp file
-            df_regions = pd.DataFrame(request.regions)
-            df_regions.to_csv(temp_regions.name, sep='\t', index=False)
-            regions_file = temp_regions.name
+        # Validate input
+        if not request.regions:
+            raise HTTPException(status_code=400, detail="At least one region must be provided")
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_prefix = os.path.join(temp_dir, 'pair_het_freq')
+        # Initialize pagination parameters
+        page_limit, page_no = initialize_pagination_params(request.page_limit, request.page_no)
 
-            # Create arguments namespace for main_calculate_het_freq
-            args = argparse.Namespace(
-                region=regions_file,
-                vcf=VCF_FILE_PATH,  # Use global VCF file path
-                pop=request.population,
-                output=output_prefix,
-                index='all',
-                maf=request.maf,
-                exchet=request.exc_het,
-                max_deletion=request.max_deletion,
-                n_pair_max=request.n_pair_max,
-                pair_het_cutoff=request.pair_het_cutoff,  # Use user-specified cutoff
-                top_n_comb=request.top_n_comb
-            )
+        # Increment cleanup counter for cache management
+        increment_cleanup_counter()
 
-            # Run the main function
-            main_calcualte_het_freq(args)
+        # Create cache key based on regions and parameters
+        cache_params = {
+            'regions': sorted([str(region) for region in request.regions]),  # Convert regions to strings for hashing
+            'population': request.population,
+            'pair_het_cutoff': request.pair_het_cutoff,
+            'max_deletion': request.max_deletion,
+            'maf': request.maf,
+            'exc_het': request.exc_het,
+            'n_pair_max': request.n_pair_max,
+            'top_n_comb': request.top_n_comb
+        }
+        cache_key = create_cache_key(cache_params, 'step4')
+        cache_path = get_cache_path(cache_key, 'step4')
 
-            # Read the output file (pair heterozygous frequencies)
-            pair_het_freq_file = f"{output_prefix}.pair_het_freq.txt"
+        logger.debug(f"Cache key: {cache_key}")
+        logger.debug(f"Cache path: {cache_path}")
+        logger.debug(f"Cache valid: {is_cache_valid(cache_path)}")
 
-            results = []
-            if os.path.exists(pair_het_freq_file):
-                df_results = pd.read_csv(pair_het_freq_file, sep='\t')
-                # Add transcript_id, gene_id, and gene_name from the first region in the request
+        # Check if results are already cached
+        if is_cache_valid(cache_path):
+            logger.info(f"Using cached results for cache key: {cache_key}")
+
+            cached_results = load_cached_results(cache_path, {
+                'results': 'pair_het_freq.pair_het_freq.txt'
+            })
+
+            all_results = cached_results.get('results', [])
+            total_count = len(all_results) if all_results else 0
+
+            logger.debug(f"Cached results count: {total_count}")
+
+            # Add transcript_id, gene_id, and gene_name from the first region in the request
+            if all_results:
                 first_region = request.regions[0] if request.regions else {}
                 transcript_id = first_region.get('transcript_id', '')
                 gene_id = first_region.get('gene_id', '')
                 gene_name = first_region.get('gene_name', '')
-                
-                # Add these fields to each row before creating records
-                df_results['transcript_id'] = transcript_id
-                df_results['gene_id'] = gene_id
-                df_results['gene_name'] = gene_name
-                
-                results = [PairHetFreqRecord(**row) for row in df_results.to_dict('records')]
-            else:
-                logger.warning(f"Output file not found: {pair_het_freq_file}")
 
-        # Clean up temporary regions file
-        os.unlink(regions_file)
+                # Add these fields to each cached result
+                for result in all_results:
+                    result['transcript_id'] = transcript_id
+                    result['gene_id'] = gene_id
+                    result['gene_name'] = gene_name
+
+            # Use the common pagination function
+            pagination_info = get_pagination_info(all_results, page_limit, page_no)
+
+            logger.debug(f"Returning {len(pagination_info['results'])} results for page {page_no}")
+
+            return PairHetFreqResponse(
+                results=pagination_info['results'],
+                total_count=pagination_info['total_count'],
+                page_no=pagination_info['page_no'],
+                page_limit=pagination_info['page_limit'],
+                total_pages=pagination_info['total_pages']
+            )
+
+        # Results not cached, use shared function to compute them
+        all_results = run_het_freq_calculation(
+            regions=request.regions,
+            population=request.population,
+            cache_key=cache_key,
+            cache_path=cache_path,
+            pair_het_cutoff=request.pair_het_cutoff,  # Use user-specified cutoff
+            top_n_comb=request.top_n_comb,
+            output_file_suffix="pair_het_freq.txt",
+            process_pair_results=True
+        )
+
+        # Use the common pagination function
+        pagination_info = get_pagination_info(all_results, page_limit, page_no)
+
+        logger.debug(f"Returning {len(pagination_info['results'])} results for page {page_no} from computation")
 
         return PairHetFreqResponse(
-            results=results,
-            total_count=len(results)
+            results=pagination_info['results'],
+            total_count=pagination_info['total_count'],
+            page_no=pagination_info['page_no'],
+            page_limit=pagination_info['page_limit'],
+            total_pages=pagination_info['total_pages']
         )
 
     except Exception as e:
@@ -777,8 +1208,16 @@ def main():
     parser.add_argument("-v", "--vcf", required=True, help="Path to VCF file")
     parser.add_argument("-p", "--port", type=int, default=8000, help="Port to run the server on")
     parser.add_argument("--host", default="127.0.0.1", help="Host to run the server on")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args()
+
+    # Configure logging level
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.info("Debug logging enabled")
+    else:
+        logging.getLogger().setLevel(logging.INFO)
 
     # Validate database file exists
     if not os.path.exists(args.transcript_database):

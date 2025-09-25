@@ -304,6 +304,10 @@ def write_output(x: Transcript, df_target_region: pd.DataFrame, out_prefix: str)
     # write target region information
     df_target_region.to_csv(f'{out_prefix}.candidate_region.txt', sep='\t', index=False)
 
+    # always write missing transcript file (empty for single transcripts)
+    with open(f'{out_prefix}.missing_transcript.txt', 'w') as f:
+        pass  # Empty file for single transcripts
+
 
 
 def main_find_candidate_region(args: argparse.Namespace) -> None:
@@ -327,9 +331,9 @@ def main_find_candidate_region(args: argparse.Namespace) -> None:
                     df_target_region = pd.concat([df_target_region, find_target_region(transcript, args.max_deletion, args.n_before_stop)])
         # write table
         df_target_region.to_csv(f'{args.output}.candidate_region.txt', sep='\t', index=False)
-        # write missing transcript if any
-        if len(tx_missing) > 0:
-            with open(f'{args.output}.missing_transcript.txt', 'w') as f:
+        # always write missing transcript file (even if empty)
+        with open(f'{args.output}.missing_transcript.txt', 'w') as f:
+            if len(tx_missing) > 0:
                 f.write("\n".join(tx_missing))
 
     # analysis for single transcript

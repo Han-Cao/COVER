@@ -265,12 +265,15 @@ async def health_check():
     return health_status
 
 @app.post("/query_results", response_model=ResultsResponse)
-async def query_het_freq(request: ResultsRequest):
+async def query_results(request: ResultsRequest):
     """
     Query the results database for heterozygous frequency data.
 
     Supports filtering by gene_id, transcript_id, or variant_id (searches both variant1 and variant2).
     At least one filter parameter must be provided.
+
+    Example usage:
+        "gene_id": "ENSG00000142192", "transcript_id": "ENST00000354192", "variant_id": "chr21:26161857:T:G"
 
     Returns:
         ResultsResponse containing filtered heterozygous frequency results
@@ -300,8 +303,8 @@ async def query_het_freq(request: ResultsRequest):
             params.append(request.transcript_id)
 
         if request.variant_id:
-            conditions.append("(variant1 LIKE ? OR variant2 LIKE ?)")
-            params.extend([f"%{request.variant_id}%", f"%{request.variant_id}%"])
+            conditions.append("(variant1 = ? OR variant2 = ?)")
+            params.extend([request.variant_id, request.variant_id])
 
         where_clause = " AND ".join(conditions)
 
@@ -356,10 +359,13 @@ async def query_het_freq(request: ResultsRequest):
         if conn:
             conn.close()
 
-@app.post("/query_transcript", response_model=TranscriptResponse)
-async def query_database(request: TranscriptRequest):
+@app.post("/step1", response_model=TranscriptResponse)
+async def query_transcript(request: TranscriptRequest):
     """
     Query the database for transcripts and annotations by gene_id or gene_name.
+
+    Example usage:
+        "gene_id": "ENSG00000142192", "gene_name": "APP"
 
     Returns:
         TranscriptResponse containing merged transcript table and exon table
@@ -463,13 +469,13 @@ async def query_database(request: TranscriptRequest):
         if conn:
             conn.close()
 
-@app.post("/get_region", response_model=RegionResponse)
+@app.post("/step2", response_model=RegionResponse)
 async def get_candidate_regions(request: RegionRequest):
     """
-    Find candidate regions for given transcript ID(s) using main_find_candidate_region.
+    Find candidate regions for given transcript_id(s).
     
-    Args:
-        request: Region request parameters including transcript_ids and analysis parameters
+    Example usage:
+        "transcript_ids": ["ENST00000354192", "ENST00000348990"]
     
     Returns:
         RegionResponse containing candidate regions as JSON
@@ -537,14 +543,33 @@ async def get_candidate_regions(request: RegionRequest):
         logger.error(f"Error in get_candidate_regions: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Region analysis failed: {str(e)}")
 
-@app.post("/get_het_freq", response_model=HetFreqResponse)
+@app.post("/step3", response_model=HetFreqResponse)
 async def get_heterozygous_frequencies(request: HetFreqRequest):
     """
     Calculate heterozygous frequencies for SNP pairs in candidate regions.
     This function sets pair_het_cutoff to 1 to skip pair calculations and only return df_het_freq.
 
-    Args:
-        request: Request parameters including regions, population, and analysis settings
+    Example usage:
+        "regions": [
+            {
+            "transcript_id": "ENST00000354192",
+            "gene_id": "ENSG00000142192",
+            "gene_name": "APP",
+            "seqname": "chr21",
+            "upstream": "5' region",
+            "upstream_start": 26170619,
+            "upstream_end": 26180618,
+            "downstream": "intron 1",
+            "downstream_start": 26090101,
+            "downstream_end": 26170553,
+            "distance": 66,
+            "strand": "-",
+            "target_exon": "exon 1",
+            "consequence": "start loss"
+            }
+        ],
+        "population": "EUR"
+
 
     Returns:
         HetFreqResponse containing heterozygous frequency results as JSON
@@ -622,14 +647,32 @@ async def get_heterozygous_frequencies(request: HetFreqRequest):
         logger.error(f"Error in get_heterozygous_frequencies: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Heterozygous frequency calculation failed: {str(e)}")
 
-@app.post("/get_pair_het_freq", response_model=PairHetFreqResponse)
+@app.post("/step4", response_model=PairHetFreqResponse)
 async def get_pair_heterozygous_frequencies(request: PairHetFreqRequest):
     """
     Calculate pair heterozygous frequencies for combinations of SNP pairs in candidate regions.
     This function allows user to specify pair_het_cutoff to control which pairs are considered.
 
-    Args:
-        request: Request parameters including regions, population, and analysis settings
+    Example usage:
+        "regions": [
+            {
+            "transcript_id": "ENST00000354192",
+            "gene_id": "ENSG00000142192",
+            "gene_name": "APP",
+            "seqname": "chr21",
+            "upstream": "5' region",
+            "upstream_start": 26170619,
+            "upstream_end": 26180618,
+            "downstream": "intron 1",
+            "downstream_start": 26090101,
+            "downstream_end": 26170553,
+            "distance": 66,
+            "strand": "-",
+            "target_exon": "exon 1",
+            "consequence": "start loss"
+            }
+        ],
+        "population": "EUR"
 
     Returns:
         PairHetFreqResponse containing pair heterozygous frequency results as JSON

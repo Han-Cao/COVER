@@ -3,6 +3,9 @@
 # specify ensemble version
 ENSEMBL_VERSION=110
 
+# install python modules
+pip3 install -r requirements.txt
+
 # download gtf from ensembl
 wget \
 -O data/Homo_sapiens.GRCh38.${ENSEMBL_VERSION}.gtf.gz \

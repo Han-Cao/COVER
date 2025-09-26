@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import tempfile
 import time
+import datetime
 from typing import List, Optional, Union, Dict, Any, Tuple
 
 import pandas as pd
@@ -22,13 +23,54 @@ from pydantic import BaseModel, Field
 from find_candidate_region import main_find_candidate_region
 from calculate_het_freq import main_calculate_het_freq
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] - [%(levelname)s]: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger(__name__)
+# Set up logging to both console and file
+def setup_logging():
+    """Set up logging configuration for both console and file output"""
+    # Create logs directory if it doesn't exist
+    logs_dir = os.path.join(os.getcwd(), 'logs')
+    os.makedirs(logs_dir, exist_ok=True)
+
+    # Create log filename with current date
+    current_date = datetime.datetime.now().strftime('%Y-%m-%d')
+    log_filename = f'cover-api.{current_date}.log'
+    log_filepath = os.path.join(logs_dir, log_filename)
+
+    # Create logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+
+    # Remove existing handlers to avoid duplicates
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+
+    # Create formatters
+    file_formatter = logging.Formatter(
+        '[%(asctime)s] - [%(levelname)s] - [%(name)s:%(lineno)d]: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    console_formatter = logging.Formatter(
+        '[%(asctime)s] - [%(levelname)s]: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    # File handler for detailed logging
+    file_handler = logging.FileHandler(log_filepath, encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(file_formatter)
+
+    # Console handler for basic logging
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(console_formatter)
+
+    # Add handlers to logger
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    return logger
+
+# Initialize logging
+logger = setup_logging()
 
 
 # Global database and VCF file paths
@@ -477,6 +519,7 @@ def get_results_db_connection() -> sqlite3.Connection:
 @app.get("/")
 async def root():
     """Root endpoint with API information"""
+    logger.info("Root endpoint called - returning API information")
     return {
         "message": "COVER API",
         "version": "0.1.0",
@@ -493,6 +536,7 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
+    logger.info("Health check endpoint called - checking system status")
     health_status = {"status": "healthy"}
     issues = []
 
@@ -545,6 +589,7 @@ async def query_results(request: ResultsRequest):
     Returns:
         ResultsResponse containing filtered heterozygous frequency results with pagination
     """
+    logger.info(f"Query results - gene_id: {request.gene_id}, transcript_id: {request.transcript_id}, variant_id: {request.variant_id}")
     conn = None
     try:
         # Get results database connection
@@ -657,6 +702,7 @@ async def query_transcript(request: TranscriptRequest):
     Returns:
         TranscriptResponse containing merged transcript table and exon table
     """
+    logger.info(f"Step1 - gene_id: {request.gene_id}, gene_name: {request.gene_name}")
     conn = None
     try:
         # Get database connection for this thread
@@ -770,6 +816,7 @@ async def get_candidate_regions(request: RegionRequest):
     Returns:
         RegionResponse containing paginated candidate regions as JSON
     """
+    logger.info(f"Step2 - transcript_ids: {request.transcript_ids}")
     try:
         # Normalize transcript_ids to list
         if isinstance(request.transcript_ids, str):
@@ -936,6 +983,8 @@ async def get_heterozygous_frequencies(request: HetFreqRequest):
     Returns:
         HetFreqResponse containing paginated heterozygous frequency results as JSON
     """
+    logger.info(f"Step3 - number of regions: {len(request.regions)}, population: {request.population}, " + 
+                f"max_deletion: {request.max_deletion}, maf: {request.maf}, exc_het: {request.exc_het}, n_pair_max: {request.n_pair_max}")
     # Validate VCF file is configured
     if VCF_FILE_PATH is None:
         raise HTTPException(status_code=500, detail="VCF file not configured")
@@ -1073,6 +1122,8 @@ async def get_pair_heterozygous_frequencies(request: PairHetFreqRequest):
     Returns:
         PairHetFreqResponse containing pair heterozygous frequency results as JSON
     """
+    logger.info(f"Step4 - number of regions: {len(request.regions)}, pair_het_cutoff: {request.pair_het_cutoff}" + 
+                f", n_pair_max: {request.n_pair_max}, top_n_comb: {request.top_n_comb}")
     # Validate VCF file is configured
     if VCF_FILE_PATH is None:
         raise HTTPException(status_code=500, detail="VCF file not configured")
@@ -1212,12 +1263,20 @@ def main():
 
     args = parser.parse_args()
 
-    # Configure logging level
+    # Configure logging level based on debug flag
+    logger = logging.getLogger()
     if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
         logger.info("Debug logging enabled")
     else:
-        logging.getLogger().setLevel(logging.INFO)
+        logger.setLevel(logging.INFO)
+
+    # Log the current log file location
+    current_date = datetime.datetime.now().strftime('%Y-%m-%d')
+    log_filename = f'cover-api.{current_date}.log'
+    logs_dir = os.path.join(os.getcwd(), 'logs')
+    log_filepath = os.path.join(logs_dir, log_filename)
+    logger.info(f"Log file: {log_filepath}")
 
     # Validate database file exists
     if not os.path.exists(args.transcript_database):

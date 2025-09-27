@@ -103,7 +103,7 @@ options:
 
 ## COVER API
 
-The COVER API provides REST endpoints for querying transcript databases and finding candidate regions programmatically.
+A web service of COVER is under development. The API server is provided in `src/cover_api.py`.
 
 Install additional dependencies for the API:
 ```
@@ -112,5 +112,5 @@ pip install fastapi uvicorn
 
 Start the API server:
 ```
-python src/cover_api.py --database data/Homo_sapiens.GRCh38.110.db --vcf data/1kGP_high_coverage_Illumina.filtered.unrelated.SNV.MAF1.bcf --port 8000 --host 127.0.0.1
+python src/cover_api.py -t data/Homo_sapiens.GRCh38.110.db -r data/results.db -v data/1kGP_high_coverage_Illumina.filtered.unrelated.SNV.MAF1.bcf --port 8000 --host 127.0.0.1
 ```

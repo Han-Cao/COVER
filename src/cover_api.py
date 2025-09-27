@@ -345,10 +345,11 @@ class HetFreqRecord(BaseModel):
     trans_het_freq: float
     max_het_freq: float
     target_genotype: str
+    population: str
 
 class ResultsRequest(BaseModel):
     """Request model for querying analysis results"""
-    gene_id: Optional[str] = Field(None, description="Gene ID to filter by")
+    gene_id: Optional[str] = Field("ENSG00000142192", description="Gene ID to filter by")
     transcript_id: Optional[str] = Field(None, description="Transcript ID to filter by")
     variant_id: Optional[str] = Field(None, description="Variant ID to filter by (searches both variant1 and variant2)")
     page_limit: Optional[int] = Field(20, description="Maximum number of results per page")
@@ -383,12 +384,9 @@ class TranscriptRecord(BaseModel):
 
 class ExonRecord(BaseModel):
     """Model for exon record"""
-    exon_id: str
     transcript_id: str
-    seqname: str
     start: int
     end: int
-    strand: str
 
 class TranscriptResponse(BaseModel):
     """Response model for transcript queries"""
@@ -467,6 +465,7 @@ class RegionResponse(BaseModel):
     page_limit: int
     total_pages: int
     missing_transcripts: Optional[List[str]] = None
+    exon_table: List[ExonRecord]
 
 class HetFreqResponse(BaseModel):
     """Response model for heterozygous frequency results"""
@@ -515,7 +514,64 @@ def get_results_db_connection() -> sqlite3.Connection:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to connect to results database: {str(e)}")
 
-# API Endpoints
+# Helper function to get exons for transcript IDs
+async def get_exons_for_transcripts(transcript_ids: List[str], conn: Optional[sqlite3.Connection] = None) -> List[ExonRecord]:
+    """Get exon information for the given transcript IDs"""
+    should_close_conn = conn is None
+    if conn is None:
+        conn = get_db_connection()
+
+    try:
+        # Query all exons for the given transcript_ids with transcript_id mapping
+        if transcript_ids:
+            # Build placeholders for the IN clause
+            placeholders = ','.join(['?' for _ in transcript_ids])
+
+            # First get transcript to exon mapping
+            transcript_query = f"""
+            SELECT transcript_id, exon_list
+            FROM transcripts
+            WHERE transcript_id IN ({placeholders})
+            """
+            df_transcripts = pd.read_sql(transcript_query, conn, params=transcript_ids)
+
+            exon_ids = []
+            transcript_to_exons = pd.DataFrame()
+
+            for _, row in df_transcripts.iterrows():
+                transcript_id = row['transcript_id']
+                if pd.notna(row['exon_list']) and row['exon_list']:
+                    exons = row['exon_list'].split(',')
+                    exon_ids.extend(exons)
+                    transcript_to_exons = pd.concat([transcript_to_exons,
+                                                     pd.DataFrame({'transcript_id': transcript_id,
+                                                                   'exon_id': exons})],
+                                                    ignore_index=True)
+
+            if exon_ids:
+                exon_placeholders = ','.join(['?' for _ in exon_ids])
+                exon_query = f"""
+                SELECT exon_id, start, end
+                FROM exons
+                WHERE exon_id IN ({exon_placeholders})
+                """
+                df_exons = pd.read_sql(exon_query, conn, params=exon_ids)
+
+                # Use pandas join to efficiently map transcript_id to exons
+                df_exons = df_exons.merge(transcript_to_exons, on='exon_id', how='left')
+            else:
+                df_exons = pd.DataFrame()
+        else:
+            df_exons = pd.DataFrame()
+
+        # Convert to response models
+        exon_table = [ExonRecord(**row) for row in df_exons.to_dict('records')]
+        return exon_table
+
+    finally:
+        if should_close_conn and conn:
+            conn.close()
+            
 @app.get("/")
 async def root():
     """Root endpoint with API information"""
@@ -526,7 +582,7 @@ async def root():
         "endpoints": {
             "/query_results": "Query het_freq results by gene_id, transcript_id, or variant_id (ResultsRequest/ResultsResponse)",
             "/step1": "Query database by gene_id or gene_name (TranscriptRequest/TranscriptResponse)",
-            "/step2": "Find candidate regions for transcript IDs (RegionRequest/RegionResponse)",
+            "/step2": "Find candidate regions for transcript IDs with exon table (RegionRequest/RegionResponse)",
             "/step3": "Calculate heterozygous frequencies for SNP pairs (HetFreqRequest/HetFreqResponse)",
             "/step4": "Calculate pair heterozygous frequencies for combinations (PairHetFreqRequest/PairHetFreqResponse)",
             "/health": "Health check endpoint"
@@ -640,7 +696,7 @@ async def query_results(request: ResultsRequest):
         query = f"""
         SELECT transcript_id, gene_id, gene_name, variant1, variant1_region,
                variant2, variant2_region, distance, target, consequence,
-               cis_het_freq, trans_het_freq, max_het_freq, target_genotype
+               cis_het_freq, trans_het_freq, max_het_freq, target_genotype, population
         FROM het_freq
         WHERE {where_clause}
         LIMIT ? OFFSET ?
@@ -667,7 +723,8 @@ async def query_results(request: ResultsRequest):
                 'cis_het_freq': 'float64',
                 'trans_het_freq': 'float64',
                 'max_het_freq': 'float64',
-                'target_genotype': 'string'
+                'target_genotype': 'string',
+                'population': 'string'
             })
 
             # Convert to list of dictionaries using pandas' optimized method
@@ -680,7 +737,7 @@ async def query_results(request: ResultsRequest):
             total_count=total_count,
             page_no=page_no,
             page_limit=page_limit,
-            total_pages=total_pages
+            total_pages=total_pages,
         )
 
     except Exception as e:
@@ -750,35 +807,13 @@ async def query_transcript(request: TranscriptRequest):
 
         # Query all exons for matched transcripts with transcript_id mapping
         if not df_transcripts.empty:
-            # Extract all unique exon_ids from exon_list column
-            exon_ids = []
-            transcript_to_exons = {}
+            # Extract transcript_ids for exon querying
+            transcript_ids = df_transcripts['transcript_id'].tolist()
 
-            for _, row in df_transcripts.iterrows():
-                transcript_id = row['transcript_id']
-                if pd.notna(row['exon_list']) and row['exon_list']:
-                    exons = row['exon_list'].split(',')
-                    exon_ids.extend(exons)
-                    transcript_to_exons[transcript_id] = exons
-
-            if exon_ids:
-                exon_placeholders = ','.join(['?' for _ in exon_ids])
-                exon_query = f"""
-                SELECT exon_id, seqname, start, end, strand
-                FROM exons
-                WHERE exon_id IN ({exon_placeholders})
-                """
-                df_exons = pd.read_sql(exon_query, conn, params=exon_ids)
-
-                # Add transcript_id to each exon by mapping back
-                df_exons['transcript_id'] = None
-                for transcript_id, exons in transcript_to_exons.items():
-                    for exon_id in exons:
-                        df_exons.loc[df_exons['exon_id'] == exon_id, 'transcript_id'] = transcript_id
-            else:
-                df_exons = pd.DataFrame()
+            # Use the shared function to get exons
+            exon_table = await get_exons_for_transcripts(transcript_ids, conn)
         else:
-            df_exons = pd.DataFrame()
+            exon_table = []
 
         # Remove exon_list from transcript data before returning
         if not df_transcripts.empty:
@@ -786,7 +821,7 @@ async def query_transcript(request: TranscriptRequest):
 
         # Convert to response models
         transcript_table = [TranscriptRecord(**row) for row in df_transcripts.to_dict('records')]
-        exon_table = [ExonRecord(**row) for row in df_exons.to_dict('records')]
+        # exon_table is already a list of ExonRecord objects from get_exons_for_transcripts()
 
         return TranscriptResponse(
             transcript_table=transcript_table,
@@ -806,15 +841,16 @@ async def query_transcript(request: TranscriptRequest):
 @app.post("/step2", response_model=RegionResponse)
 async def get_candidate_regions(request: RegionRequest):
     """
-    Find candidate regions for given transcript_id(s) with pagination support.
+    Find candidate regions for given transcript_id(s) with pagination support and exon table.
 
     Results are computed once and cached for subsequent pagination requests.
+    Also returns exon information for the corresponding transcripts.
 
     Example usage:
         "transcript_ids": ["ENST00000354192", "ENST00000348990"]
 
     Returns:
-        RegionResponse containing paginated candidate regions as JSON
+        RegionResponse containing paginated candidate regions and exon table as JSON
     """
     logger.info(f"Step2 - transcript_ids: {request.transcript_ids}")
     try:
@@ -860,6 +896,9 @@ async def get_candidate_regions(request: RegionRequest):
             all_results = cached_results.get('results', [])
             missing_transcripts = cached_results.get('missing_transcripts')
 
+            # Query exons for the transcript_ids
+            exon_table = await get_exons_for_transcripts(transcript_ids, conn=None)
+
             # Use the common pagination function (handles defaults and validation)
             pagination_info = get_pagination_info(all_results, page_limit, page_no)
 
@@ -871,7 +910,8 @@ async def get_candidate_regions(request: RegionRequest):
                 page_no=pagination_info['page_no'],
                 page_limit=pagination_info['page_limit'],
                 total_pages=pagination_info['total_pages'],
-                missing_transcripts=missing_transcripts
+                missing_transcripts=missing_transcripts,
+                exon_table=exon_table
             )
 
         # Results not cached, need to compute them
@@ -933,6 +973,9 @@ async def get_candidate_regions(request: RegionRequest):
             # Clean up temporary input file
             os.unlink(temp_input_path)
 
+        # Query exons for the transcript_ids
+        exon_table = await get_exons_for_transcripts(transcript_ids, conn=None)
+
         # Use the common pagination function
         pagination_info = get_pagination_info(all_results, page_limit, page_no)
 
@@ -944,7 +987,8 @@ async def get_candidate_regions(request: RegionRequest):
             page_no=pagination_info['page_no'],
             page_limit=pagination_info['page_limit'],
             total_pages=pagination_info['total_pages'],
-            missing_transcripts=missing_transcripts
+            missing_transcripts=missing_transcripts,
+            exon_table=exon_table
         )
 
     except Exception as e:

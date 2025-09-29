@@ -69,15 +69,13 @@ def setup_logging():
 
     return logger
 
-# Initialize logging
+# Initialize logging with default level
 logger = setup_logging()
-
 
 # Global database and VCF file paths
 TX_DATABASE_PATH = None
 RESULTS_DATABASE_PATH = None
 VCF_FILE_PATH = None
-
 # Cache directory for storing temporary results
 CACHE_DIR = os.path.join(tempfile.gettempdir(), 'cover_cache')
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -139,11 +137,11 @@ def load_cached_results(cache_path: str, result_files: Dict[str, str]) -> Dict[s
                 # All other cached files are TSV format, read with pandas
                 try:
                     df = pd.read_csv(file_path, sep='\t')
-                    results[file_key] = df.to_dict('records')
-                    logger.debug(f"Loaded {len(results[file_key])} records from {filename}")
+                    results[file_key] = df
+                    logger.debug(f"Loaded {len(df)} records from {filename}")
                 except Exception as e:
                     logger.warning(f"Error parsing cached CSV file {file_path}: {e}")
-                    results[file_key] = []
+                    results[file_key] = pd.DataFrame()
         else:
             # All cached files should exist, so warn if any are missing
             logger.warning(f"Cached file not found: {file_path}")
@@ -170,7 +168,7 @@ def initialize_pagination_params(page_limit: Optional[int] = None, page_no: Opti
     
     return page_limit, page_no
 
-def get_pagination_info(all_results: List[Dict], page_limit: Optional[int] = None, page_no: Optional[int] = None) -> Dict[str, Any]:
+def get_pagination_info(all_results: Any, page_limit: Optional[int] = None, page_no: Optional[int] = None) -> Dict[str, Any]:
     """
     Calculate pagination information and return paginated results.
 
@@ -186,21 +184,37 @@ def get_pagination_info(all_results: List[Dict], page_limit: Optional[int] = Non
         HTTPException: If pagination parameters are invalid
     """
 
-    total_count = len(all_results) if all_results else 0
-    total_pages = (total_count + page_limit - 1) // page_limit  # Ceiling division
-    start_idx = (page_no - 1) * page_limit
-    end_idx = start_idx + page_limit
-
-    # Get paginated results
-    paginated_results = all_results[start_idx:end_idx] if all_results else []
-
-    return {
-        'results': paginated_results,
-        'total_count': total_count,
-        'page_no': page_no,
-        'page_limit': page_limit,
-        'total_pages': total_pages
-    }
+    # Support pandas DataFrame and list-like inputs
+    if isinstance(all_results, pd.DataFrame):
+        total_count = len(all_results)
+        total_pages = (total_count + page_limit - 1) // page_limit  # Ceiling division
+        start_idx = (page_no - 1) * page_limit
+        end_idx = start_idx + page_limit
+        paginated_df = all_results.iloc[start_idx:end_idx]
+        paginated_results = paginated_df.to_dict('records')
+        return {
+            'results': paginated_results,
+            'total_count': total_count,
+            'page_no': page_no,
+            'page_limit': page_limit,
+            'total_pages': total_pages
+        }
+    else:
+        total_count = len(all_results) if all_results is not None else 0
+        total_pages = (total_count + page_limit - 1) // page_limit  # Ceiling division
+        start_idx = (page_no - 1) * page_limit
+        end_idx = start_idx + page_limit
+        if total_count > 0:
+            paginated_results = all_results[start_idx:end_idx]
+        else:
+            paginated_results = []
+        return {
+            'results': paginated_results,
+            'total_count': total_count,
+            'page_no': page_no,
+            'page_limit': page_limit,
+            'total_pages': total_pages
+        }
 
 def cleanup_expired_cache():
     """Clean up expired cache directories when counter reaches threshold"""
@@ -239,7 +253,7 @@ def run_het_freq_calculation(
     top_n_comb: int = 1000,
     output_file_suffix: str = "het_freq.het_freq.txt",
     process_pair_results: bool = False
-) -> List[Dict[str, Any]]:
+) -> pd.DataFrame:
     """
     Shared function to process regions and calculate heterozygous frequencies.
 
@@ -254,7 +268,7 @@ def run_het_freq_calculation(
         process_pair_results: Whether to process pair results (step4) or single results (step3)
 
     Returns:
-        List of processed results
+        pandas DataFrame of processed results
     """
     logger.info(f"Computing heterozygous frequencies for cache key: {cache_key}")
 
@@ -293,7 +307,7 @@ def run_het_freq_calculation(
         # Read the output file
         output_file = f"{output_prefix}.{output_file_suffix}"
 
-        all_results = []
+        all_results = pd.DataFrame()
         if os.path.exists(output_file):
             df_results = pd.read_csv(output_file, sep='\t')
 
@@ -308,11 +322,7 @@ def run_het_freq_calculation(
             df_results['gene_id'] = gene_id
             df_results['gene_name'] = gene_name
 
-            # For step3, remove population column since it's in the response
-            if not process_pair_results and 'population' in df_results.columns:
-                df_results = df_results.drop(columns=['population'])
-
-            all_results = df_results.to_dict('records')
+            all_results = df_results
         else:
             logger.warning(f"Output file not found: {output_file}")
 
@@ -320,7 +330,7 @@ def run_het_freq_calculation(
         # Clean up temporary regions file
         os.unlink(regions_file)
 
-    return all_results
+    return all_results if isinstance(all_results, pd.DataFrame) else pd.DataFrame()
 
 # FastAPI app instance
 app = FastAPI(
@@ -443,6 +453,8 @@ class HetFreqRequest(BaseModel):
     n_pair_max: Optional[int] = Field(200, description="Maximum number of variant pairs to consider")
     page_limit: Optional[int] = Field(20, description="Maximum number of results per page")
     page_no: Optional[int] = Field(1, description="Page number to retrieve (starting from 1)")
+    filter_min: Optional[float] = Field(0, description="Minimum max_het_freq (inclusive) filter applied after caching")
+    filter_max: Optional[float] = Field(1, description="Maximum max_het_freq (inclusive) filter applied after caching")
 
 class PairHetFreqRequest(BaseModel):
     """Request model for pair heterozygous frequency calculation"""
@@ -456,6 +468,8 @@ class PairHetFreqRequest(BaseModel):
     top_n_comb: Optional[int] = Field(1000, description="Top N combinations to output")
     page_limit: Optional[int] = Field(20, description="Maximum number of results per page")
     page_no: Optional[int] = Field(1, description="Page number to retrieve (starting from 1)")
+    filter_min: Optional[float] = Field(0, description="Minimum pair_het_freq (inclusive) filter applied after caching")
+    filter_max: Optional[float] = Field(1, description="Maximum pair_het_freq (inclusive) filter applied after caching")
 
 class RegionResponse(BaseModel):
     """Response model for candidate regions"""
@@ -706,9 +720,8 @@ async def query_results(request: ResultsRequest):
 
         df_results = pd.read_sql(query, conn, params=params)
 
-        # Convert to response models - use vectorized operations for better performance
+        # Convert to response models
         if not df_results.empty:
-            # Convert data types in bulk using vectorized operations
             df_results = df_results.astype({
                 'transcript_id': 'string',
                 'gene_id': 'string',
@@ -726,6 +739,9 @@ async def query_results(request: ResultsRequest):
                 'target_genotype': 'string',
                 'population': 'string'
             })
+
+            # sort by max_het_freq in descending order
+            df_results = df_results.sort_values(by='max_het_freq', ascending=False)
 
             # Convert to list of dictionaries using pandas' optimized method
             results = [HetFreqRecord(**row) for row in df_results.to_dict('records')]
@@ -1070,59 +1086,35 @@ async def get_heterozygous_frequencies(request: HetFreqRequest):
                 'results': 'het_freq.het_freq.txt'
             })
 
-            all_results = cached_results.get('results', [])
-            total_count = len(all_results) if all_results else 0
-
-            logger.debug(f"Cached results count: {total_count}")
-
-            # Add transcript_id, gene_id, and gene_name from the first region in the request
-            if all_results:
-                first_region = request.regions[0] if request.regions else {}
-                transcript_id = first_region.get('transcript_id', '')
-                gene_id = first_region.get('gene_id', '')
-                gene_name = first_region.get('gene_name', '')
-
-                # Add these fields to each cached result
-                for result in all_results:
-                    result['transcript_id'] = transcript_id
-                    result['gene_id'] = gene_id
-                    result['gene_name'] = gene_name
-
-                # Remove population from records since it's now in the response
-                if 'population' in all_results[0] if all_results else False:
-                    all_results = [{k: v for k, v in result.items() if k != 'population'} for result in all_results]
-
-            # Use the common pagination function
-            pagination_info = get_pagination_info(all_results, page_limit, page_no)
-
-            logger.debug(f"Returning {len(pagination_info['results'])} results for page {page_no}")
-
-            return HetFreqResponse(
-                results=pagination_info['results'],
-                total_count=pagination_info['total_count'],
-                page_no=pagination_info['page_no'],
-                page_limit=pagination_info['page_limit'],
-                total_pages=pagination_info['total_pages'],
-                population=request.population
+            # Get cached results (DataFrame expected)
+            df_results = cached_results.get('results', None)
+            logger.debug(f"Cached results count: {len(df_results) if isinstance(df_results, pd.DataFrame) else 0}")
+        # Results not cached, run het freq calculation
+        else:
+            df_results = run_het_freq_calculation(
+                regions=request.regions,
+                population=request.population,
+                cache_key=cache_key,
+                cache_path=cache_path,
+                pair_het_cutoff=1.0,  # Force to 1 to skip pair calculations
+                top_n_comb=1000,
+                output_file_suffix="het_freq.txt",
+                process_pair_results=False
             )
 
-        # Results not cached, use shared function to compute them
-        all_results = run_het_freq_calculation(
-            regions=request.regions,
-            population=request.population,
-            cache_key=cache_key,
-            cache_path=cache_path,
-            pair_het_cutoff=1.0,  # Force to 1 to skip pair calculations
-            top_n_comb=1000,
-            output_file_suffix="het_freq.txt",
-            process_pair_results=False
-        )
+        # Apply filters on max_het_freq
+        if not df_results.empty:
+            mask = (df_results['max_het_freq'].astype(float) >= request.filter_min) & \
+                    (df_results['max_het_freq'].astype(float) <= request.filter_max)
+            df_results = df_results[mask]
+        
+        # sort by max_het_freq in descending order
+        df_results = df_results.sort_values(by='max_het_freq', ascending=False)
 
-        # Use the common pagination function
-        pagination_info = get_pagination_info(all_results, page_limit, page_no)
+        # Use the common pagination function with DataFrame
+        pagination_info = get_pagination_info(df_results, page_limit, page_no)
 
-        logger.debug(f"Returning {len(pagination_info['results'])} results for page {page_no} from computation")
-
+        logger.debug(f"Returning {len(pagination_info['results'])} results for page {page_no}")
         return HetFreqResponse(
             results=pagination_info['results'],
             total_count=pagination_info['total_count'],
@@ -1141,6 +1133,7 @@ async def get_pair_heterozygous_frequencies(request: PairHetFreqRequest):
     """
     Calculate pair heterozygous frequencies for combinations of SNP pairs in candidate regions.
     This function allows user to specify pair_het_cutoff to control which pairs are considered.
+    Results can be filtered by pair_het_freq using filter_min and filter_max parameters.
 
     Example usage:
         "regions": [
@@ -1167,7 +1160,8 @@ async def get_pair_heterozygous_frequencies(request: PairHetFreqRequest):
         PairHetFreqResponse containing pair heterozygous frequency results as JSON
     """
     logger.info(f"Step4 - number of regions: {len(request.regions)}, pair_het_cutoff: {request.pair_het_cutoff}" + 
-                f", n_pair_max: {request.n_pair_max}, top_n_comb: {request.top_n_comb}")
+                f", n_pair_max: {request.n_pair_max}, top_n_comb: {request.top_n_comb}" +
+                f", filter_min: {request.filter_min}, filter_max: {request.filter_max}")
     # Validate VCF file is configured
     if VCF_FILE_PATH is None:
         raise HTTPException(status_code=500, detail="VCF file not configured")
@@ -1211,53 +1205,35 @@ async def get_pair_heterozygous_frequencies(request: PairHetFreqRequest):
                 'results': 'pair_het_freq.pair_het_freq.txt'
             })
 
-            all_results = cached_results.get('results', [])
-            total_count = len(all_results) if all_results else 0
-
-            logger.debug(f"Cached results count: {total_count}")
-
-            # Add transcript_id, gene_id, and gene_name from the first region in the request
-            if all_results:
-                first_region = request.regions[0] if request.regions else {}
-                transcript_id = first_region.get('transcript_id', '')
-                gene_id = first_region.get('gene_id', '')
-                gene_name = first_region.get('gene_name', '')
-
-                # Add these fields to each cached result
-                for result in all_results:
-                    result['transcript_id'] = transcript_id
-                    result['gene_id'] = gene_id
-                    result['gene_name'] = gene_name
-
-            # Use the common pagination function
-            pagination_info = get_pagination_info(all_results, page_limit, page_no)
-
-            logger.debug(f"Returning {len(pagination_info['results'])} results for page {page_no}")
-
-            return PairHetFreqResponse(
-                results=pagination_info['results'],
-                total_count=pagination_info['total_count'],
-                page_no=pagination_info['page_no'],
-                page_limit=pagination_info['page_limit'],
-                total_pages=pagination_info['total_pages']
+            # Get cached results
+            df_results = cached_results.get('results', None)
+            logger.debug(f"Cached results count: {len(df_results)}")
+        # Results not cached, run het freq calculation
+        else:
+            df_results = run_het_freq_calculation(
+                regions=request.regions,
+                population=request.population,
+                cache_key=cache_key,
+                cache_path=cache_path,
+                pair_het_cutoff=request.pair_het_cutoff,
+                top_n_comb=request.top_n_comb,
+                output_file_suffix="pair_het_freq.txt",
+                process_pair_results=True
             )
 
-        # Results not cached, use shared function to compute them
-        all_results = run_het_freq_calculation(
-            regions=request.regions,
-            population=request.population,
-            cache_key=cache_key,
-            cache_path=cache_path,
-            pair_het_cutoff=request.pair_het_cutoff,  # Use user-specified cutoff
-            top_n_comb=request.top_n_comb,
-            output_file_suffix="pair_het_freq.txt",
-            process_pair_results=True
-        )
+        # Apply filters on pair_het_freq
+        if not df_results.empty:
+            mask = (df_results['pair_het_freq'].astype(float) >= request.filter_min) & \
+                    (df_results['pair_het_freq'].astype(float) <= request.filter_max)
+            df_results = df_results[mask]
+        
+        # sort by pair_het_freq in descending order
+        df_results = df_results.sort_values(by='pair_het_freq', ascending=False)
 
         # Use the common pagination function
-        pagination_info = get_pagination_info(all_results, page_limit, page_no)
+        pagination_info = get_pagination_info(df_results, page_limit, page_no)
 
-        logger.debug(f"Returning {len(pagination_info['results'])} results for page {page_no} from computation")
+        logger.debug(f"Returning {len(pagination_info['results'])} results for page {page_no}")
 
         return PairHetFreqResponse(
             results=pagination_info['results'],
@@ -1308,12 +1284,12 @@ def main():
     args = parser.parse_args()
 
     # Configure logging level based on debug flag
-    logger = logging.getLogger()
     if args.debug:
+        # Update existing logger configuration for debug mode
         logger.setLevel(logging.DEBUG)
+        for handler in logger.handlers:
+            handler.setLevel(logging.DEBUG)
         logger.info("Debug logging enabled")
-    else:
-        logger.setLevel(logging.INFO)
 
     # Log the current log file location
     current_date = datetime.datetime.now().strftime('%Y-%m-%d')

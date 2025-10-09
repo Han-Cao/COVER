@@ -386,6 +386,17 @@ app = FastAPI(
     version="0.1.0"
 )
 
+# Configure CORS
+def configure_cors(app: FastAPI, allowed_origins: List[str]) -> None:
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],  # Allows all methods
+        allow_headers=["*"],  # Allows all headers
+    )
+
 class HetFreqRecord(BaseModel):
     """Model for heterozygous frequency record"""
     transcript_id: str
@@ -1334,6 +1345,7 @@ def main():
     parser.add_argument("-v", "--vcf", required=True, help="Path to VCF file")
     parser.add_argument("-p", "--port", type=int, default=8000, help="Port to run the server on")
     parser.add_argument("--host", default="127.0.0.1", help="Host to run the server on")
+    parser.add_argument("--allowed-origins", default=None, help="Comma separated list of allowed origins")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args()
@@ -1378,6 +1390,12 @@ def main():
     logger.info(f"Using transcript database: {args.transcript_database}")
     logger.info(f"Using results database: {args.results_database}")
     logger.info(f"Using VCF file: {args.vcf}")
+
+    # Configure CORS
+    if args.allowed_origins:
+        lst_allowed_origins = args.allowed_origins.split(",")
+        configure_cors(app, lst_allowed_origins)
+        logger.info(f"Allowed origins: {lst_allowed_origins}")
 
     uvicorn.run(app, host=args.host, port=args.port)
 

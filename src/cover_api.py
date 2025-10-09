@@ -6,6 +6,7 @@ FastAPI backend for COVER.
 
 import argparse
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -80,12 +81,12 @@ VCF_FILE_PATH = None
 CACHE_DIR = os.path.join(tempfile.gettempdir(), 'cover_cache')
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-# Cache expiration time in seconds (1 hour)
-CACHE_EXPIRATION = 3600
+# Cache expiration time in seconds (1 week)
+CACHE_EXPIRATION = 604800
 
 # Global counter for cache cleanup
 CACHE_CLEANUP_COUNTER = 0
-CLEANUP_THRESHOLD = 100
+CLEANUP_THRESHOLD = 1000
 
 def create_cache_key(params: Dict[str, Any], endpoint_name: str) -> str:
     """Create a cache key from parameters dictionary using hash for filesystem safety"""
@@ -103,14 +104,24 @@ def get_cache_path(cache_key: str, endpoint_name: str) -> str:
     """Get the cache directory path for a given cache key and endpoint"""
     return os.path.join(CACHE_DIR, endpoint_name, cache_key)
 
-def is_cache_valid(cache_path: str) -> bool:
-    """Check if cache exists and is not expired"""
+def is_cache_valid(cache_path: str, result_files: List[str] = None) -> bool:
+    """Check if cache exists, is not expired, and contains required result files"""
     if not os.path.exists(cache_path):
         return False
 
     # Check if cache is expired
     cache_age = time.time() - os.path.getmtime(cache_path)
-    return cache_age < CACHE_EXPIRATION
+    if cache_age >= CACHE_EXPIRATION:
+        return False
+
+    # If specific result files are specified, check that they exist
+    if result_files:
+        for filename in result_files:
+            result_file_path = os.path.join(cache_path, filename)
+            if not os.path.exists(result_file_path):
+                return False
+
+    return True
 
 def load_cached_results(cache_path: str, result_files: Dict[str, str]) -> Dict[str, Any]:
     """Load cached results from files"""
@@ -216,6 +227,39 @@ def get_pagination_info(all_results: Any, page_limit: Optional[int] = None, page
             'total_pages': total_pages
         }
 
+def save_input_parameters(request: Any, cache_path: str) -> None:
+    """Save the full input parameters to a JSON file in the cache directory"""
+    try:
+        # Ensure cache directory exists
+        os.makedirs(cache_path, exist_ok=True)
+
+        # Create parameters.json file path
+        params_file = os.path.join(cache_path, 'parameters.json')
+
+        # Skip saving if parameters file already exists
+        if os.path.exists(params_file):
+            logger.debug(f"Parameters file already exists, skipping save: {params_file}")
+            return
+
+        # Convert request object to dictionary, excluding pagination and filter parameters
+        request_dict = request.model_dump()
+
+        # Remove pagination parameters as they don't affect computation results
+        request_dict.pop('page_limit', None)
+        request_dict.pop('page_no', None)
+
+        # Remove filter parameters as they are applied after computation/caching
+        request_dict.pop('filter_min', None)
+        request_dict.pop('filter_max', None)
+
+        # Save to JSON file with indentation for readability
+        with open(params_file, 'w', encoding='utf-8') as f:
+            json.dump(request_dict, f, indent=2, ensure_ascii=False)
+
+        logger.debug(f"Saved input parameters to: {params_file}")
+    except Exception as e:
+        logger.warning(f"Failed to save input parameters to {cache_path}: {str(e)}")
+
 def cleanup_expired_cache():
     """Clean up expired cache directories when counter reaches threshold"""
     global CACHE_CLEANUP_COUNTER
@@ -244,6 +288,23 @@ def increment_cleanup_counter():
     if CACHE_CLEANUP_COUNTER >= CLEANUP_THRESHOLD:
         cleanup_expired_cache()
 
+def add_het_freq_meta(df: pd.DataFrame, regions: List[Dict[str, Any]], population: str) -> pd.DataFrame:
+    """Add region information to the result DataFrame"""
+
+    # Add transcript_id, gene_id, gene_name, and population from the first region in the request
+    first_region = regions[0] if regions else {}
+    transcript_id = first_region.get('transcript_id', '')
+    gene_id = first_region.get('gene_id', '')
+    gene_name = first_region.get('gene_name', '')
+
+    # Add these fields to each row
+    df['transcript_id'] = transcript_id
+    df['gene_id'] = gene_id
+    df['gene_name'] = gene_name
+    df['population'] = population
+
+    return df
+
 def run_het_freq_calculation(
     regions: List[Dict[str, Any]],
     population: str,
@@ -271,9 +332,6 @@ def run_het_freq_calculation(
         pandas DataFrame of processed results
     """
     logger.info(f"Computing heterozygous frequencies for cache key: {cache_key}")
-
-    # Create cache directory first
-    os.makedirs(cache_path, exist_ok=True)
 
     # Create temporary file for regions data
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as temp_regions:
@@ -307,22 +365,11 @@ def run_het_freq_calculation(
         # Read the output file
         output_file = f"{output_prefix}.{output_file_suffix}"
 
-        all_results = pd.DataFrame()
+        df_results = pd.DataFrame()
         if os.path.exists(output_file):
             df_results = pd.read_csv(output_file, sep='\t')
+            df_results = add_het_freq_meta(df_results, regions, population)
 
-            # Add transcript_id, gene_id, and gene_name from the first region in the request
-            first_region = regions[0] if regions else {}
-            transcript_id = first_region.get('transcript_id', '')
-            gene_id = first_region.get('gene_id', '')
-            gene_name = first_region.get('gene_name', '')
-
-            # Add these fields to each row before creating records
-            df_results['transcript_id'] = transcript_id
-            df_results['gene_id'] = gene_id
-            df_results['gene_name'] = gene_name
-
-            all_results = df_results
         else:
             logger.warning(f"Output file not found: {output_file}")
 
@@ -330,7 +377,7 @@ def run_het_freq_calculation(
         # Clean up temporary regions file
         os.unlink(regions_file)
 
-    return all_results if isinstance(all_results, pd.DataFrame) else pd.DataFrame()
+    return df_results
 
 # FastAPI app instance
 app = FastAPI(
@@ -900,8 +947,11 @@ async def get_candidate_regions(request: RegionRequest):
         logger.debug(f"Cache path: {cache_path}")
         logger.debug(f"Cache valid: {is_cache_valid(cache_path)}")
 
+        # Save input parameters to cache directory
+        save_input_parameters(request, cache_path)
+
         # Check if results are already cached
-        if is_cache_valid(cache_path):
+        if is_cache_valid(cache_path, ['candidate_regions.candidate_region.txt']):
             logger.info(f"Using cached results for cache key: {cache_key}")
 
             cached_results = load_cached_results(cache_path, {
@@ -932,9 +982,6 @@ async def get_candidate_regions(request: RegionRequest):
 
         # Results not cached, need to compute them
         logger.info(f"Computing candidate regions for cache key: {cache_key}")
-
-        # Create cache directory first
-        os.makedirs(cache_path, exist_ok=True)
 
         # Create temporary file for input
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as temp_input:
@@ -1078,8 +1125,11 @@ async def get_heterozygous_frequencies(request: HetFreqRequest):
         logger.debug(f"Cache path: {cache_path}")
         logger.debug(f"Cache valid: {is_cache_valid(cache_path)}")
 
+        # Save input parameters to cache directory
+        save_input_parameters(request, cache_path)
+
         # Check if results are already cached
-        if is_cache_valid(cache_path):
+        if is_cache_valid(cache_path, ['het_freq.het_freq.txt']):
             logger.info(f"Using cached results for cache key: {cache_key}")
 
             cached_results = load_cached_results(cache_path, {
@@ -1088,6 +1138,7 @@ async def get_heterozygous_frequencies(request: HetFreqRequest):
 
             # Get cached results (DataFrame expected)
             df_results = cached_results.get('results', None)
+            df_results = add_het_freq_meta(df_results, request.regions, request.population)
             logger.debug(f"Cached results count: {len(df_results) if isinstance(df_results, pd.DataFrame) else 0}")
         # Results not cached, run het freq calculation
         else:
@@ -1197,8 +1248,11 @@ async def get_pair_heterozygous_frequencies(request: PairHetFreqRequest):
         logger.debug(f"Cache path: {cache_path}")
         logger.debug(f"Cache valid: {is_cache_valid(cache_path)}")
 
+        # Save input parameters to cache directory
+        save_input_parameters(request, cache_path)
+
         # Check if results are already cached
-        if is_cache_valid(cache_path):
+        if is_cache_valid(cache_path, ['pair_het_freq.pair_het_freq.txt']):
             logger.info(f"Using cached results for cache key: {cache_key}")
 
             cached_results = load_cached_results(cache_path, {
@@ -1207,6 +1261,7 @@ async def get_pair_heterozygous_frequencies(request: PairHetFreqRequest):
 
             # Get cached results
             df_results = cached_results.get('results', None)
+            df_results = add_het_freq_meta(df_results, request.regions, request.population)
             logger.debug(f"Cached results count: {len(df_results)}")
         # Results not cached, run het freq calculation
         else:

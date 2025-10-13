@@ -1210,6 +1210,10 @@ async def get_heterozygous_frequencies(request: HetFreqRequest):
         )
 
     except Exception as e:
+        # Re-raise HTTPExceptions
+        if isinstance(e, HTTPException):
+            raise e
+        
         logger.error(f"Error in get_heterozygous_frequencies: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Heterozygous frequency calculation failed: {str(e)}")
 

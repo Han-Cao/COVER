@@ -367,11 +367,15 @@ def run_het_freq_calculation(
 
         df_results = pd.DataFrame()
         if os.path.exists(output_file):
-            df_results = pd.read_csv(output_file, sep='\t')
-            df_results = add_het_freq_meta(df_results, regions, population)
-
+            # if no suitable snps, the file is empty
+            try:
+                df_results = pd.read_csv(output_file, sep='\t')
+                df_results = add_het_freq_meta(df_results, regions, population)
+            except pd.errors.EmptyDataError:
+                logger.warning(f"Empty step3 output for cache key: {cache_key}")
+                return df_results
         else:
-            logger.warning(f"Output file not found: {output_file}")
+            logger.error(f"Output file not found: {output_file}")
 
     finally:
         # Clean up temporary regions file
@@ -452,6 +456,7 @@ class TranscriptRecord(BaseModel):
 
 class ExonRecord(BaseModel):
     """Model for exon record"""
+    exon_no: int
     transcript_id: str
     start: int
     end: int
@@ -601,7 +606,7 @@ async def get_exons_for_transcripts(transcript_ids: List[str], conn: Optional[sq
 
             # First get transcript to exon mapping
             transcript_query = f"""
-            SELECT transcript_id, exon_list
+            SELECT transcript_id, exon_list, strand
             FROM transcripts
             WHERE transcript_id IN ({placeholders})
             """
@@ -631,10 +636,25 @@ async def get_exons_for_transcripts(transcript_ids: List[str], conn: Optional[sq
 
                 # Use pandas join to efficiently map transcript_id to exons
                 df_exons = df_exons.merge(transcript_to_exons, on='exon_id', how='left')
+
+                # annotate exon number within each
+                # if strand is +, count by increasing start position
+                # if strand is -, count by decreasing start position
+                tx_strand = df_transcripts['strand'].iloc[0]
+                if tx_strand == '+':
+                    df_exons['exon_no'] = df_exons.groupby('transcript_id')['start'].rank(method='dense', ascending=True)
+                elif tx_strand == '-':
+                    df_exons['exon_no'] = df_exons.groupby('transcript_id')['start'].rank(method='dense', ascending=False)
+                else:
+                    logger.error(f"Unknown transcript strand: {tx_strand}")
+
             else:
                 df_exons = pd.DataFrame()
         else:
             df_exons = pd.DataFrame()
+
+        # sort exon by transcript_id and exon_no
+        df_exons = df_exons.sort_values(by=['transcript_id', 'exon_no'])
 
         # Convert to response models
         exon_table = [ExonRecord(**row) for row in df_exons.to_dict('records')]
@@ -1163,7 +1183,10 @@ async def get_heterozygous_frequencies(request: HetFreqRequest):
                 output_file_suffix="het_freq.txt",
                 process_pair_results=False
             )
-
+            
+            if df_results.empty:
+                raise HTTPException(status_code=500, detail="No available SNPs targeting the selected regions, please expand your selection.")
+                        
         # Apply filters on max_het_freq
         if not df_results.empty:
             mask = (df_results['max_het_freq'].astype(float) >= request.filter_min) & \

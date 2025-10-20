@@ -217,11 +217,11 @@ def find_target_region(x: Transcript, max_deletion: int, n_before_stop: int) -> 
     # if there are frameshift exons, find region pairs targeting them
     # deletion between intron i and j will delete exon i+1 to exon j
     # upstream: any intron after start codon exon and before stop codon exon - N_BEFORE_STOP
-    # downstream: any non-coding region within max_deletion
+    # downstream: intron until the one before stop codon exon - N_BEFORE_STOP
     # inclusion creteria: sum(frameshift) % 3 != 0
     for upstream_idx in range(x.start_exon, x.stop_exon - n_before_stop): 
         upstream_region = x.non_coding.loc[upstream_idx]
-        for downstream_idx in x.non_coding.loc[upstream_idx + 1:].index:
+        for downstream_idx in x.non_coding.loc[upstream_idx + 1:(x.stop_exon - n_before_stop)].index:
             # if no any frameshift exon in between, skip
             target_exons = x.exons.loc[upstream_idx+1:downstream_idx].index
             if not frameshift_idx.isin(target_exons).any():

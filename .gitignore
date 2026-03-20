@@ -4,3 +4,5 @@ __pycache__
 !tests/truth/*
 *bcf*
 logs/
+analysis/
+output/

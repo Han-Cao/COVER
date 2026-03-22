@@ -166,48 +166,49 @@ def region_dist(x_start: int, x_end: int, y_start: int, y_end: int) -> int:
         return 0
 
     
-def find_target_region(x: Transcript, max_deletion: int, n_before_stop: int) -> pd.DataFrame:
+def find_target_region(x: Transcript, max_deletion: int, n_before_stop: int, include_start_loss: bool) -> pd.DataFrame:
     """
     Find target paris of region for deletion
     Creteria:
-    1. start codon, or
+    1. start codon (if include_start_loss), or
     2. cause frame shift and exon no. <= stop codon exon no. - N_BEFORE_STOP
     """
 
     logger = logging.getLogger(__name__)
     lst_target = []
-    # find region pairs targeting start codon 
-    # upstream region (0 index non-coding region) + any downstream region within max_deletion
-    upstream_region = x.non_coding.iloc[0]
-    for i in range(1, len(x.non_coding)):
-        downstream_region = x.non_coding.iloc[i]
-        pair_dist = region_dist(upstream_region['start'], upstream_region['end'], 
-                                downstream_region['start'], downstream_region['end'])
-        if pair_dist <= max_deletion:
-            lst_target.append({'transcript_id': x.id,
-                               'gene_id': x.gene_id,
-                               'gene_name': x.gene_name,
-                               'seqname': x.seqname,
-                               'upstream': upstream_region['name'],
-                               'upstream_start': upstream_region['start'],
-                               'upstream_end': upstream_region['end'],
-                               'downstream': downstream_region['name'],
-                               'downstream_start': downstream_region['start'],
-                               'downstream_end': downstream_region['end'],
-                               'distance': pair_dist,
-                               'strand': x.strand,
-                               'target_exon': f'exon {x.start_exon}',
-                               'consequence': 'start loss'})
-        else:
-            break
+    
+    if include_start_loss:
+        # find region pairs targeting start codon 
+        # upstream region (0 index non-coding region) + any downstream region within max_deletion
+        upstream_region = x.non_coding.iloc[0]
+        for i in range(1, len(x.non_coding)):
+            downstream_region = x.non_coding.iloc[i]
+            pair_dist = region_dist(upstream_region['start'], upstream_region['end'], 
+                                    downstream_region['start'], downstream_region['end'])
+            if pair_dist <= max_deletion:
+                lst_target.append({'transcript_id': x.id,
+                                'gene_id': x.gene_id,
+                                'gene_name': x.gene_name,
+                                'seqname': x.seqname,
+                                'upstream': upstream_region['name'],
+                                'upstream_start': upstream_region['start'],
+                                'upstream_end': upstream_region['end'],
+                                'downstream': downstream_region['name'],
+                                'downstream_start': downstream_region['start'],
+                                'downstream_end': downstream_region['end'],
+                                'distance': pair_dist,
+                                'strand': x.strand,
+                                'target_exon': f'exon {x.start_exon}',
+                                'consequence': 'start loss'})
+            else:
+                break
+        
+        if len(lst_target) == 0:
+            logger.warning(f"No non-coding regions within {max_deletion}bp can delete start codon")
     
     # find targetable non-start codon exons
     frameshift_idx = x.exons.index[(x.exons['region'] == 'CDS') & (x.exons.index <= x.stop_exon - n_before_stop) & (x.exons['frameshift'] != 0)]
-    if len(lst_target) == 0:
-        logger.warning(f"No non-coding regions within {max_deletion}bp can delete start codon")
-        logger.info(f"Find {len(frameshift_idx)} target exons to cause frameshift mutation")
-    else:
-        logger.info(f"Find {len(frameshift_idx) + 1} target exons for knockout (1 start codon, {len(frameshift_idx)} frameshift)")
+    logger.info(f"Find {len(frameshift_idx)} target exons to cause frameshift mutation")
 
     # if no targetable exon, return regions targeting start codon
     if len(frameshift_idx) == 0:
@@ -328,7 +329,8 @@ def main_find_candidate_region(args: argparse.Namespace) -> None:
                     tx_missing.append(line.strip())
                 else:
                     transcript = query_db(line.strip(), conn, args.max_deletion, args.splice_donor_len, args.splice_receptor_len)
-                    df_target_region = pd.concat([df_target_region, find_target_region(transcript, args.max_deletion, args.n_before_stop)])
+                    df_target_region = pd.concat([df_target_region, 
+                                                  find_target_region(transcript, args.max_deletion, args.n_before_stop, args.include_start_loss)])
         # write table
         df_target_region.to_csv(f'{args.output}.candidate_region.txt', sep='\t', index=False)
         # always write missing transcript file (even if empty)
@@ -339,7 +341,7 @@ def main_find_candidate_region(args: argparse.Namespace) -> None:
     # analysis for single transcript
     elif args.id:
         transcript = query_db(args.id, conn, args.max_deletion, args.splice_donor_len, args.splice_receptor_len)
-        df_target_region = find_target_region(transcript, args.max_deletion, args.n_before_stop)
+        df_target_region = find_target_region(transcript, args.max_deletion, args.n_before_stop, args.include_start_loss)
         # write table and summary
         write_output(transcript, df_target_region, args.output)
     else:
@@ -356,6 +358,7 @@ if __name__ == "__main__":
     parser.add_argument("--splice-donor-len", help="Length of splice donor region (default: 10)", type=int, default=10)
     parser.add_argument("--splice-receptor-len", help="Length of splice receptor region (default: 28)", type=int, default=28)
     parser.add_argument("--n-before-stop", help="Minimum number of exons before the stop codon to be considered as target (default: 2)", type=int, default=2)
+    parser.add_argument("--include-start-loss", help="Include start loss when finding target region", action="store_true")
     args = parser.parse_args()
 
     main_find_candidate_region(args)

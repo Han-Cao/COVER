@@ -31,10 +31,11 @@ def transcript_worker(x: Transcript,
                       pair_per_tx: int,
                       n_pair_max: int,
                       pair_het_cutoff: float,
-                      top_n_comb: int) -> tuple:
+                      top_n_comb: int,
+                      include_start_loss: bool) -> tuple:
     """Calculate co-heterozygous frequency for a transcript"""
     # find target region
-    df_region = find_target_region(x, max_deletion, n_before_stop)
+    df_region = find_target_region(x, max_deletion, n_before_stop, include_start_loss)
 
     # calculate co-heterozygous frequency
     df_het_freq, df_pair_het_freq = calculate_all_het_freq(df_region, vcf_file, pop, maf, het, max_deletion, 
@@ -115,7 +116,8 @@ def main_run_all_het(args: argparse.Namespace):
                       pair_per_tx=args.pair_per_tx,
                       n_pair_max=args.n_pair_max,
                       pair_het_cutoff=args.pair_het_cutoff,
-                      top_n_comb=args.top_n_comb)
+                      top_n_comb=args.top_n_comb,
+                      include_start_loss=args.include_start_loss)
     
     with Pool(processes=args.cpu) as pool:
         for df_het_freq_tx, df_pair_het_freq_tx in pool.imap_unordered(run_job, tx_lst):
@@ -156,7 +158,8 @@ if __name__ == '__main__':
     parser.add_argument("--splice-donor-len", help="Length of splice donor region (default: 10)", type=int, default=10)
     parser.add_argument("--splice-receptor-len", help="Length of splice receptor region (default: 28)", type=int, default=28)
     parser.add_argument("--n-before-stop", help="Minimum number of exons before the stop codon to be considered as target (default: 2)", type=int, default=2)
-    
+    parser.add_argument("--include-start-loss", help="Include start loss when finding target region", action="store_true")
+
     # optional parameters to calculate co-heterozygous frequency
     parser.add_argument('--maf', help='MAF cutoff (default: 0.05)', type=float, default=0.05)
     parser.add_argument('--exchet', help='Excess heterozygosity test p-value cutoff (default: 1e-5)', type=float, default=1e-5)

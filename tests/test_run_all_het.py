@@ -26,6 +26,7 @@ def run_script() -> None:
                '-l', os.path.join(INPUT_DIR, 'APP_GFAP_transcripts.txt'),
                '-p', 'EUR',
                '--top-n-comb', '1000',
+               '--include-start-loss',
                '-o', os.path.join(OUTPUT_DIR, 'APP_GFAP_transcript.EUR')]
     
     subprocess.run(command, check=True)

@@ -156,6 +156,29 @@ def read_transcript(conn: sqlite3.Connection) -> list:
 
     return df_transcript['transcript_id'].tolist()
 
+
+def read_target_exons(file_path: str) -> pd.DataFrame:
+    """ Read predefined target exons from file """
+
+    if file_path is None:
+        return None
+
+    df_target = pd.read_csv(file_path, sep='\t')
+
+    # check file headers: transcript_id and del_exon_exon_id_set
+    assert 'transcript_id' in df_target.columns and 'del_exon_exon_id_set' in df_target.columns
+
+    return df_target
+
+
+def is_consecutive(lst: list[int]) -> bool:
+    """ Check if a list is consecutive """
+
+    lst_consec = list(range(min(lst), max(lst) + 1))
+
+    return lst == lst_consec or lst[::-1] == lst_consec
+
+
 def region_dist(x_start: int, x_end: int, y_start: int, y_end: int) -> int:
     """Calculate distance between two genomic regions"""
     if x_start > y_end:
@@ -166,16 +189,72 @@ def region_dist(x_start: int, x_end: int, y_start: int, y_end: int) -> int:
         return 0
 
     
-def find_target_region(x: Transcript, max_deletion: int, n_before_stop: int, include_start_loss: bool) -> pd.DataFrame:
+def find_target_region(x: Transcript, 
+                       max_deletion: int, 
+                       n_before_stop: int, 
+                       include_start_loss: bool,
+                       target_exons: pd.DataFrame=None) -> pd.DataFrame:
     """
     Find target paris of region for deletion
     Creteria:
     1. start codon (if include_start_loss), or
     2. cause frame shift and exon no. <= stop codon exon no. - N_BEFORE_STOP
+
+    If there is predefined target exons, force to use them
     """
 
     logger = logging.getLogger(__name__)
     lst_target = []
+
+    if target_exons is not None:
+        df_tx_target_exons = target_exons[target_exons['transcript_id'] == x.id]
+        # check if tx exists
+        if df_tx_target_exons.shape[0] == 0:
+            logger.warning(f"No predefined target exons for transcript {x.id}, skip")
+            return pd.DataFrame()
+        # get list of target exons
+        lst_target_exons = df_tx_target_exons['del_exon_exon_id_set'].tolist()
+        for target_exons_str in lst_target_exons:
+            target_exons = target_exons_str.split(',')
+            # check if exons exist
+            if not set(target_exons).issubset(x.exon_list):
+                logger.warning(f"Not all ppredefined target exons {target_exons} exist for transcript {x.id}, skip.")
+                continue
+            # extract target exons from annotation
+            df_work_exons = x.exons.loc[x.exons['exon_id'].isin(target_exons)]
+            # check if exon index are consecutive
+            if not is_consecutive(df_work_exons.index.tolist()):
+                logger.warning(f"Predefined target exons {target_exons} for transcript {x.id} are not consecutive, skip.")
+                continue
+            # get target non-coding regions
+            # deletion between intron i and j will delete exon i+1 to exon j
+            upstream_idx = df_work_exons.index.min() - 1
+            downstream_idx = df_work_exons.index.max()
+
+            upstream_region = x.non_coding.iloc[upstream_idx]
+            downstream_region = x.non_coding.iloc[downstream_idx]
+
+            pair_dist = region_dist(upstream_region['start'], upstream_region['end'], 
+                                    downstream_region['start'], downstream_region['end'])
+            if pair_dist <= max_deletion:
+                lst_target.append({'transcript_id': x.id,
+                                   'gene_id': x.gene_id,
+                                   'gene_name': x.gene_name,
+                                   'seqname': x.seqname,
+                                   'upstream': upstream_region['name'],
+                                   'upstream_start': upstream_region['start'],
+                                   'upstream_end': upstream_region['end'],
+                                   'downstream': downstream_region['name'],
+                                   'downstream_start': downstream_region['start'],
+                                   'downstream_end': downstream_region['end'],
+                                   'distance': pair_dist,
+                                   'strand': x.strand,
+                                   'exon_list': ','.join(target_exons),
+                                   'consequence': 'user-defined'})
+            else:
+                logger.warning(f"Predefined target exons {target_exons} for transcript {x.id} are too far ({pair_dist}) from each other, skip.")
+
+        return pd.DataFrame(lst_target)
     
     if include_start_loss:
         # find region pairs targeting start codon 
@@ -187,19 +266,19 @@ def find_target_region(x: Transcript, max_deletion: int, n_before_stop: int, inc
                                     downstream_region['start'], downstream_region['end'])
             if pair_dist <= max_deletion:
                 lst_target.append({'transcript_id': x.id,
-                                'gene_id': x.gene_id,
-                                'gene_name': x.gene_name,
-                                'seqname': x.seqname,
-                                'upstream': upstream_region['name'],
-                                'upstream_start': upstream_region['start'],
-                                'upstream_end': upstream_region['end'],
-                                'downstream': downstream_region['name'],
-                                'downstream_start': downstream_region['start'],
-                                'downstream_end': downstream_region['end'],
-                                'distance': pair_dist,
-                                'strand': x.strand,
-                                'target_exon': f'exon {x.start_exon}',
-                                'consequence': 'start loss'})
+                                   'gene_id': x.gene_id,
+                                   'gene_name': x.gene_name,
+                                   'seqname': x.seqname,
+                                   'upstream': upstream_region['name'],
+                                   'upstream_start': upstream_region['start'],
+                                   'upstream_end': upstream_region['end'],
+                                   'downstream': downstream_region['name'],
+                                   'downstream_start': downstream_region['start'],
+                                   'downstream_end': downstream_region['end'],
+                                   'distance': pair_dist,
+                                   'strand': x.strand,
+                                   'target_exon': f'exon {x.start_exon}',
+                                   'consequence': 'start loss'})
             else:
                 break
         
@@ -266,7 +345,7 @@ def find_target_region(x: Transcript, max_deletion: int, n_before_stop: int, inc
 
 
 
-def query_db(id: str, conn: sqlite3.Connection, max_deletion: int, splice_donor_len: int, splice_receptor_len: int):
+def query_db(id: str, conn: sqlite3.Connection, max_deletion: int, splice_donor_len: int, splice_receptor_len: int) -> Transcript:
     """Query transcript information from database"""
     logger = logging.getLogger(__name__)
 
@@ -317,6 +396,12 @@ def main_find_candidate_region(args: argparse.Namespace) -> None:
     # Connect to database
     conn = sqlite3.connect(args.db)
 
+    # read target exons
+    if args.target_exons is None:
+        df_target = None
+    else:
+        df_target = read_target_exons(args.target_exons)
+
     # analysis for list of transcipts
     if args.id_list:
         df_target_region = pd.DataFrame()
@@ -330,7 +415,11 @@ def main_find_candidate_region(args: argparse.Namespace) -> None:
                 else:
                     transcript = query_db(line.strip(), conn, args.max_deletion, args.splice_donor_len, args.splice_receptor_len)
                     df_target_region = pd.concat([df_target_region, 
-                                                  find_target_region(transcript, args.max_deletion, args.n_before_stop, args.include_start_loss)])
+                                                  find_target_region(transcript, 
+                                                                     args.max_deletion, 
+                                                                     args.n_before_stop, 
+                                                                     args.include_start_loss,
+                                                                     df_target)])
         # write table
         df_target_region.to_csv(f'{args.output}.candidate_region.txt', sep='\t', index=False)
         # always write missing transcript file (even if empty)
@@ -341,7 +430,11 @@ def main_find_candidate_region(args: argparse.Namespace) -> None:
     # analysis for single transcript
     elif args.id:
         transcript = query_db(args.id, conn, args.max_deletion, args.splice_donor_len, args.splice_receptor_len)
-        df_target_region = find_target_region(transcript, args.max_deletion, args.n_before_stop, args.include_start_loss)
+        df_target_region = find_target_region(transcript, 
+                                              args.max_deletion, 
+                                              args.n_before_stop, 
+                                              args.include_start_loss,
+                                              df_target)
         # write table and summary
         write_output(transcript, df_target_region, args.output)
     else:
@@ -353,6 +446,7 @@ if __name__ == "__main__":
     parser.add_argument("-l", "--id-list", help="List of transcript IDs to process, will only output candidate region table", type=str)
     parser.add_argument("-d", "--db", help="SQLite3 database file for GTF", required=True, type=str)
     parser.add_argument("-o", "--output", help="Output file prefix", required=True, type=str)
+    parser.add_argument('--target-exons', help="Predefined exons to target (default: None)", type=str, default=None)
 
     parser.add_argument("-m", "--max-deletion", help="Maximum deletion size (default: 10000)", type=int, default=10000)
     parser.add_argument("--splice-donor-len", help="Length of splice donor region (default: 10)", type=int, default=10)

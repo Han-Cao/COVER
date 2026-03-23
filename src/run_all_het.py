@@ -12,7 +12,7 @@ import os
 import pandas as pd
 import sqlite3
 
-from find_candidate_region import find_target_region, query_db, Transcript, read_transcript
+from find_candidate_region import find_target_region, query_db, Transcript, read_transcript, read_target_exons
 from calculate_het_freq import calculate_all_het_freq
 
 # Set up logging
@@ -32,7 +32,8 @@ def transcript_worker(x: Transcript,
                       n_pair_max: int,
                       pair_het_cutoff: float,
                       top_n_comb: int,
-                      include_start_loss: bool) -> tuple:
+                      include_start_loss: bool,
+                      target_exons: pd.DataFrame) -> tuple:
     """Calculate co-heterozygous frequency for a transcript"""
     # find target region
     df_region = find_target_region(x, max_deletion, n_before_stop, include_start_loss)
@@ -85,6 +86,12 @@ def main_run_all_het(args: argparse.Namespace):
         else:
             conn = sqlite3.connect(args.db)
             tx_id_lst = read_transcript(conn)
+    
+    # read predefined target exons
+    if args.target_exons is None:
+        df_target = None
+    else:
+        df_target = read_target_exons(args.target_exons)
 
     # query transcript from database
     if do_query:
@@ -117,7 +124,8 @@ def main_run_all_het(args: argparse.Namespace):
                       n_pair_max=args.n_pair_max,
                       pair_het_cutoff=args.pair_het_cutoff,
                       top_n_comb=args.top_n_comb,
-                      include_start_loss=args.include_start_loss)
+                      include_start_loss=args.include_start_loss,
+                      target_exons=df_target)
     
     with Pool(processes=args.cpu) as pool:
         for df_het_freq_tx, df_pair_het_freq_tx in pool.imap_unordered(run_job, tx_lst):
@@ -146,6 +154,7 @@ if __name__ == '__main__':
     parser.add_argument("-d", "--db", help="SQLite3 database file for GTF", required=True)
     parser.add_argument('-v', '--vcf', help='Reference 1000G VCF file', required=True)
     parser.add_argument("-o", "--output", help="Output file prefix", required=True)
+    parser.add_argument('--target-exons', help="Predefined exons to target (default: None)", type=str, default=None)
     parser.add_argument('-p', '--pop', help='Population', choices=['AFR', 'AMR', 'EAS', 'EUR', 'SAS'], required=True)
     parser.add_argument('--cpu', help='Number of CPUs to use', type=int, default=4)
 

@@ -36,7 +36,7 @@ def transcript_worker(x: Transcript,
                       target_exons: pd.DataFrame) -> tuple:
     """Calculate co-heterozygous frequency for a transcript"""
     # find target region
-    df_region = find_target_region(x, max_deletion, n_before_stop, include_start_loss)
+    df_region = find_target_region(x, max_deletion, n_before_stop, include_start_loss, target_exons)
 
     # calculate co-heterozygous frequency
     df_het_freq, df_pair_het_freq = calculate_all_het_freq(df_region, vcf_file, pop, maf, het, max_deletion, 

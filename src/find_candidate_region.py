@@ -231,8 +231,17 @@ def find_target_region(x: Transcript,
             upstream_idx = df_work_exons.index.min() - 1
             downstream_idx = df_work_exons.index.max()
 
-            upstream_region = x.non_coding.iloc[upstream_idx]
-            downstream_region = x.non_coding.iloc[downstream_idx]
+            # if intron no.upstream_idx not in x.non_coding, it should use the 5'region
+            if upstream_idx not in x.non_coding.index:
+                # this ensure it is included in the 5'region
+                if upstream_idx < x.non_coding.index[1]:
+                    upstream_idx = 0
+                else:
+                    logger.warning(f"Cannot find upstream non-coding region for {target_exons} of transcript {x.id}, skip.")
+                    continue
+
+            upstream_region = x.non_coding.loc[upstream_idx]
+            downstream_region = x.non_coding.loc[downstream_idx]
 
             pair_dist = region_dist(upstream_region['start'], upstream_region['end'], 
                                     downstream_region['start'], downstream_region['end'])
@@ -249,7 +258,7 @@ def find_target_region(x: Transcript,
                                    'downstream_end': downstream_region['end'],
                                    'distance': pair_dist,
                                    'strand': x.strand,
-                                   'exon_list': ','.join(target_exons),
+                                   'target_exon': ','.join(target_exons),
                                    'consequence': 'user-defined'})
             else:
                 logger.warning(f"Predefined target exons {target_exons} for transcript {x.id} are too far ({pair_dist}) from each other, skip.")

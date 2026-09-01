@@ -12,8 +12,8 @@ import os
 import pandas as pd
 import sqlite3
 
-from find_candidate_region import find_target_region, query_db, Transcript, read_transcript, read_target_exons
-from calculate_het_freq import calculate_all_het_freq
+from cover.find_candidate_region import find_target_region, query_db, Transcript, read_transcript, read_target_exons
+from cover.calculate_het_freq import calculate_all_het_freq
 
 # Set up logging
 logging.basicConfig(level=logging.INFO,

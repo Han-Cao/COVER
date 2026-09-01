@@ -21,8 +21,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 # Import local modules
-from find_candidate_region import main_find_candidate_region
-from calculate_het_freq import main_calculate_het_freq
+from cover.find_candidate_region import main_find_candidate_region
+from cover.calculate_het_freq import main_calculate_het_freq
 
 # Set up logging to both console and file
 def setup_logging():

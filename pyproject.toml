@@ -30,10 +30,10 @@ api = [
 ]
 
 [project.scripts]
-cover = "run_all_het:main"
-cover-gtf2db = "gtf2db:main"
-cover-result2db = "result2db:main"
-cover-api = "cover_api:main"
+cover = "cover.run_all_het:main"
+cover-gtf2db = "cover.gtf2db:main"
+cover-result2db = "cover.result2db:main"
+cover-api = "cover.cover_api:main"
 
 [tool.setuptools]
 packages = {find = {where = ["src"]}}

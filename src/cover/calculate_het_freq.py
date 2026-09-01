@@ -28,7 +28,7 @@ def get_data_file(population):
     
     # Use importlib.resources to access data files
     # This works both in development and after installation
-    with importlib.resources.path('src.data', filename) as path:
+    with importlib.resources.path('cover.data', filename) as path:
         return str(path)
 
 POP_SAMPLE_FILE = {

@@ -16,39 +16,53 @@ Code for COVER strategy. The document is under construction.
 
 ## Installation
 
-Clone this repository `git clone https://github.com/Han-Cao/COVER.git`.
+COVER was developed in Python >= 3.10.
 
-Install required tools:
-- bcftools
-- python3
-
-Install python modules:
+To install COVER, clone this repository `git clone https://github.com/Han-Cao/COVER.git` and run:
 
 ```
-pip install numpy==1.26.4 pandas gtfparse pysam
+pip install .
 ```
+
+To use COVER-api, install additional dependencies:
+
+```
+pip install .[api]
+```
+
+To prepare required 1000 Genomes VCFs, make sure you have `bcftools` installed.
 
 ## Prepare database
 
-Run `setup.sh` to download ENSEMBL GTF annotation and 1000 Genomes VCF file and set up the transcirpt database. You will get:
+Run `setup.sh` to download 1000 Genomes VCF file. You will get:
 
-- `data/Homo_sapiens.GRCh38.110.gtf.gz`: raw ENSEMBL GTF
-- `data/Homo_sapiens.GRCh38.110.db`: SQLite database of the GTF
 - `data/1kGP_high_coverage_Illumina.filtered.unrelated.SNV.MAF1.bcf`: High-coverage 1000 Genomes Project VCF file of unrelated individuals, only keep biallelic SNV with MAF > 0.01.
 
-By default, ENSEMBL V110 is used. To use another version, modify `ENSEMBL_VERSION` in `setup.sh`.
+Transcript annotation of ENSEMBL V110 is provided in `data/Homo_sapiens.GRCh38.110.db`. To use another ENSEMBL version, run `cover-gtf2db`:
+
+```
+usage: cover-gtf2db [-h] [-g GTF] [-d DB]
+
+Parse GTF files and store into a database
+
+options:
+  -h, --help         show this help message and exit
+  -g GTF, --gtf GTF  input GTF file
+  -d DB, --db DB     output SQLite3 database file
+```
 
 ## Find candidate variant pairs and estimate coverage
 
-Run `run_all_het.py` to identify common variant pairs and estimate their coverage (i.e., heterozygous frequency) in a specific population.
+Run `cover` to identify common variant pairs and estimate their coverage (i.e., heterozygous frequency) in a specific population.
 
 ```
-python src/run_all_het.py \
+cover \
 -d data/Homo_sapiens.GRCh38.110.db \
 -v data/1kGP_high_coverage_Illumina.filtered.unrelated.SNV.MAF1.bcf \
 -l transcripts.txt \
 -p EUR \
--o PREFIX
+-o PREFIX \
+--cpu 4
 ```
 
 ### Input
@@ -56,7 +70,8 @@ python src/run_all_het.py \
 - GTF database: `data/Homo_sapiens.GRCh38.110.db`
 - 1000 Genomes VCF: `data/1kGP_high_coverage_Illumina.filtered.unrelated.SNV.MAF1.bcf`
 - Population: `AMR`, `AFR`, `EUR`, `EAS`, `SAS`
-- Transcript list: one ENSEMBL transcript ID (without version suffix) per line. If not specified, all transcripts in the database will be processed.
+- Transcript list (optional): one ENSEMBL transcript ID (without version suffix) per line. If not specified, all transcripts in the database will be processed.
+- Number of CPUs (optional): `4` (this is also the default value)
 
 ### Output
 
@@ -68,13 +83,20 @@ python src/run_all_het.py \
 
 ### Parameters
 ```
-run_all_het.py
+usage: cover [-h] -d DB -v VCF -o OUTPUT [--target-exons TARGET_EXONS] -p {AFR,AMR,EAS,EUR,SAS} [--cpu CPU] [-l ID_LIST] [--save-pickle] [--max-deletion MAX_DELETION] [--splice-donor-len SPLICE_DONOR_LEN]
+             [--splice-receptor-len SPLICE_RECEPTOR_LEN] [--n-before-stop N_BEFORE_STOP] [--include-start-loss] [--start-loss-only] [--maf MAF] [--exchet EXCHET] [--pair-per-tx PAIR_PER_TX]
+             [--n-pair-max N_PAIR_MAX] [--pair-het-cutoff PAIR_HET_CUTOFF] [--top-n-comb TOP_N_COMB]
+
+Calculate co-heterozygous frequency for all transcripts in the database
 
 options:
+  -h, --help            show this help message and exit
   -d DB, --db DB        SQLite3 database file for GTF
   -v VCF, --vcf VCF     Reference 1000G VCF file
   -o OUTPUT, --output OUTPUT
                         Output file prefix
+  --target-exons TARGET_EXONS
+                        Predefined exons to target (default: None)
   -p {AFR,AMR,EAS,EUR,SAS}, --pop {AFR,AMR,EAS,EUR,SAS}
                         Population
   --cpu CPU             Number of CPUs to use
@@ -89,6 +111,8 @@ options:
                         Length of splice receptor region (default: 28)
   --n-before-stop N_BEFORE_STOP
                         Minimum number of exons before the stop codon to be considered as target (default: 2)
+  --include-start-loss  Include start loss when finding target region
+  --start-loss-only     Only include start loss when finding target region
   --maf MAF             MAF cutoff (default: 0.05)
   --exchet EXCHET       Excess heterozygosity test p-value cutoff (default: 1e-5)
   --pair-per-tx PAIR_PER_TX
@@ -103,14 +127,14 @@ options:
 
 ## COVER API
 
-A web service of COVER is under development. The API server is provided in `src/cover_api.py`.
-
-Install additional dependencies for the API:
-```
-pip install fastapi uvicorn
-```
+A web service of COVER is under development. The API server is provided in `cover-api`.
 
 Start the API server:
 ```
-python src/cover_api.py -t data/Homo_sapiens.GRCh38.110.db -r data/results.db -v data/1kGP_high_coverage_Illumina.filtered.unrelated.SNV.MAF1.bcf --port 8000 --host 127.0.0.1
+cover-api -t data/Homo_sapiens.GRCh38.110.db -r data/results.db -v data/1kGP_high_coverage_Illumina.filtered.unrelated.SNV.MAF1.bcf --port 8000 --host 127.0.0.1
+```
+
+The `data/results.db` file is generated from the result file `PREFIX.het_freq.all.txt`:
+```
+cover-result2db -d results.db --het-freq-file PREFIX.het_freq.all.txt
 ```

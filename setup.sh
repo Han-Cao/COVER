@@ -1,21 +1,5 @@
 #!/bin/bash
 
-# specify ensemble version
-ENSEMBL_VERSION=110
-
-# install python modules
-pip3 install -r requirements.txt
-
-# download gtf from ensembl
-wget \
--O data/Homo_sapiens.GRCh38.${ENSEMBL_VERSION}.gtf.gz \
-https://ftp.ensembl.org/pub/release-${ENSEMBL_VERSION}/gtf/homo_sapiens/Homo_sapiens.GRCh38.${ENSEMBL_VERSION}.gtf.gz
-
-# parse gtf and store into database
-python3 src/gtf2db.py \
---gtf data/Homo_sapiens.GRCh38.${ENSEMBL_VERSION}.gtf.gz \
---db data/Homo_sapiens.GRCh38.${ENSEMBL_VERSION}.db
-
 # download 1000G phased vcf
 # VCF requirement:
 # fully phased, biallelic, no missing genotypes

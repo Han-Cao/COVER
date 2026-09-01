@@ -65,10 +65,42 @@ def get_max_rows(df: pd.DataFrame, col: str, group: str='transcript_id') -> pd.D
     return df_max
 
 
-def main_run_all_het(args: argparse.Namespace):
+def main():
     """Main function"""
 
     logger = logging.getLogger(__name__)
+
+    # parse arguments
+    parser = argparse.ArgumentParser(description='Calculate co-heterozygous frequency for all transcripts in the database')
+    # required parameters
+    parser.add_argument("-d", "--db", help="SQLite3 database file for GTF", required=True)
+    parser.add_argument('-v', '--vcf', help='Reference 1000G VCF file', required=True)
+    parser.add_argument("-o", "--output", help="Output file prefix", required=True)
+    parser.add_argument('--target-exons', help="Predefined exons to target (default: None)", type=str, default=None)
+    parser.add_argument('-p', '--pop', help='Population', choices=['AFR', 'AMR', 'EAS', 'EUR', 'SAS'], required=True)
+    parser.add_argument('--cpu', help='Number of CPUs to use', type=int, default=4)
+
+    # optional parameters for query transcripts
+    parser.add_argument('-l', '--id-list', metavar='ID_LIST', help='List of transcript IDs to process')
+    parser.add_argument('--save-pickle', help='Save transcript db to pickle file', action='store_true')
+
+    # optional parameters to find candidate region 
+    parser.add_argument("--max-deletion", help="Maximum deletion size (default: 10000)", type=int, default=10000)
+    parser.add_argument("--splice-donor-len", help="Length of splice donor region (default: 10)", type=int, default=10)
+    parser.add_argument("--splice-receptor-len", help="Length of splice receptor region (default: 28)", type=int, default=28)
+    parser.add_argument("--n-before-stop", help="Minimum number of exons before the stop codon to be considered as target (default: 2)", type=int, default=2)
+    parser.add_argument("--include-start-loss", help="Include start loss when finding target region", action="store_true")
+    parser.add_argument("--start-loss-only", help="Only include start loss when finding target region", action="store_true")
+
+    # optional parameters to calculate co-heterozygous frequency
+    parser.add_argument('--maf', help='MAF cutoff (default: 0.05)', type=float, default=0.05)
+    parser.add_argument('--exchet', help='Excess heterozygosity test p-value cutoff (default: 1e-5)', type=float, default=1e-5)
+    parser.add_argument('--pair-per-tx', help='Maximum number of variant pairs per transcript to output (default: 1000)', type=int, default=1000)
+    parser.add_argument('--n-pair-max', help='Maximum number of variant pairs to be considered for combinations of two variant pairs (default: 200)', type=int, default=200)
+    parser.add_argument('--pair-het-cutoff', help='Minimum heterozygous frequency to be considered for combinations of two variant pairs (default: 0.1)', type=float, default=0.1)
+    parser.add_argument('--top-n-comb', help='Top N combination of two variant pairs to be output (default: 10)', type=int, default=10)
+
+    args = parser.parse_args()
 
     # if specified ID list, only work on them
     do_query = True
@@ -150,36 +182,5 @@ def main_run_all_het(args: argparse.Namespace):
 
 
 if __name__ == '__main__':
-    # parse arguments
-    parser = argparse.ArgumentParser(description='Calculate co-heterozygous frequency for all transcripts in the database')
-    # required parameters
-    parser.add_argument("-d", "--db", help="SQLite3 database file for GTF", required=True)
-    parser.add_argument('-v', '--vcf', help='Reference 1000G VCF file', required=True)
-    parser.add_argument("-o", "--output", help="Output file prefix", required=True)
-    parser.add_argument('--target-exons', help="Predefined exons to target (default: None)", type=str, default=None)
-    parser.add_argument('-p', '--pop', help='Population', choices=['AFR', 'AMR', 'EAS', 'EUR', 'SAS'], required=True)
-    parser.add_argument('--cpu', help='Number of CPUs to use', type=int, default=4)
 
-    # optional parameters for query transcripts
-    parser.add_argument('-l', '--id-list', metavar='ID_LIST', help='List of transcript IDs to process')
-    parser.add_argument('--save-pickle', help='Save transcript db to pickle file', action='store_true')
-
-    # optional parameters to find candidate region 
-    parser.add_argument("--max-deletion", help="Maximum deletion size (default: 10000)", type=int, default=10000)
-    parser.add_argument("--splice-donor-len", help="Length of splice donor region (default: 10)", type=int, default=10)
-    parser.add_argument("--splice-receptor-len", help="Length of splice receptor region (default: 28)", type=int, default=28)
-    parser.add_argument("--n-before-stop", help="Minimum number of exons before the stop codon to be considered as target (default: 2)", type=int, default=2)
-    parser.add_argument("--include-start-loss", help="Include start loss when finding target region", action="store_true")
-    parser.add_argument("--start-loss-only", help="Only include start loss when finding target region", action="store_true")
-
-    # optional parameters to calculate co-heterozygous frequency
-    parser.add_argument('--maf', help='MAF cutoff (default: 0.05)', type=float, default=0.05)
-    parser.add_argument('--exchet', help='Excess heterozygosity test p-value cutoff (default: 1e-5)', type=float, default=1e-5)
-    parser.add_argument('--pair-per-tx', help='Maximum number of variant pairs per transcript to output (default: 1000)', type=int, default=1000)
-    parser.add_argument('--n-pair-max', help='Maximum number of variant pairs to be considered for combinations of two variant pairs (default: 200)', type=int, default=200)
-    parser.add_argument('--pair-het-cutoff', help='Minimum heterozygous frequency to be considered for combinations of two variant pairs (default: 0.1)', type=float, default=0.1)
-    parser.add_argument('--top-n-comb', help='Top N combination of two variant pairs to be output (default: 10)', type=int, default=10)
-
-    args = parser.parse_args()
-
-    main_run_all_het(args)
+    main()

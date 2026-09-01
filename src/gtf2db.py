@@ -158,17 +158,18 @@ def create_db(gtf_file, db_file) -> None:
     conn.commit()
     conn.close()
 
-def main_gtf2db(args: argparse.Namespace) -> None:
+def main() -> None:
     """Main function"""
 
-    # Create database
-    create_db(args.gtf, args.db)
-
-if __name__ == '__main__':
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Parse GTF files and store into a database')
     parser.add_argument('-g', '--gtf', help='input GTF file')
     parser.add_argument('-d', '--db', help='output SQLite3 database file')
     args = parser.parse_args()
 
-    main_gtf2db(args)
+    # Create database
+    create_db(args.gtf, args.db)
+
+if __name__ == '__main__':
+
+    main()

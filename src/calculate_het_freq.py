@@ -7,6 +7,8 @@ import logging
 import os
 from os.path import dirname
 from io import StringIO
+import importlib.resources
+from pathlib import Path
 
 import pandas as pd
 import numpy as np
@@ -20,12 +22,21 @@ logging.basicConfig(level=logging.INFO,
                     datefmt='%Y-%m-%d %H:%M:%S')
 
 # population sample id files
+def get_data_file(population):
+    """Get the path to a data file using importlib.resources."""
+    filename = f'1kGP.unrelated.{population}.txt'
+    
+    # Use importlib.resources to access data files
+    # This works both in development and after installation
+    with importlib.resources.path('src.data', filename) as path:
+        return str(path)
+
 POP_SAMPLE_FILE = {
-    'AFR': os.path.join(dirname(dirname(__file__)), 'data', '1kGP.unrelated.AFR.txt'),
-    'AMR': os.path.join(dirname(dirname(__file__)), 'data', '1kGP.unrelated.AMR.txt'),
-    'EAS': os.path.join(dirname(dirname(__file__)), 'data', '1kGP.unrelated.EAS.txt'),
-    'EUR': os.path.join(dirname(dirname(__file__)), 'data', '1kGP.unrelated.EUR.txt'),
-    'SAS': os.path.join(dirname(dirname(__file__)), 'data', '1kGP.unrelated.SAS.txt')
+    'AFR': get_data_file('AFR'),
+    'AMR': get_data_file('AMR'),
+    'EAS': get_data_file('EAS'),
+    'EUR': get_data_file('EUR'),
+    'SAS': get_data_file('SAS')
 }
 
 # heterozygous genotype code

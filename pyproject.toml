@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "COVER"
+version = "0.1.0"
+description = "COmmon Variants-assisted genome-Editing Remedy."
+authors = [
+    { name = "Han Cao", email = "hcaoad@connect.ust.hk" },
+]
+dependencies = [
+    "numpy == 1.26.4",
+    "pysam",
+    "pandas",
+    "gtfparse"
+]
+requires-python = ">=3.10"
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = {file = "LICENSE"}
+
+[project.optional-dependencies]
+api = [
+    "fastapi",
+    "uvicorn"
+]
+
+[project.scripts]
+cover = "run_all_het:main"
+cover-gtf2db = "gtf2db:main"
+cover-result2db = "result2db:main"
+cover-api = "cover_api:main"
+
+[tool.setuptools]
+packages = {find = {where = ["src"]}}
+include-package-data = true
+
+[tool.setuptools.package-data]
+"*" = ["*.txt"]

@@ -33,10 +33,11 @@ def transcript_worker(x: Transcript,
                       pair_het_cutoff: float,
                       top_n_comb: int,
                       include_start_loss: bool,
+                      start_loss_only: bool,
                       target_exons: pd.DataFrame) -> tuple:
     """Calculate co-heterozygous frequency for a transcript"""
     # find target region
-    df_region = find_target_region(x, max_deletion, n_before_stop, include_start_loss, target_exons)
+    df_region = find_target_region(x, max_deletion, n_before_stop, include_start_loss, start_loss_only, target_exons)
 
     # calculate co-heterozygous frequency
     df_het_freq, df_pair_het_freq = calculate_all_het_freq(df_region, vcf_file, pop, maf, het, max_deletion, 
@@ -125,6 +126,7 @@ def main_run_all_het(args: argparse.Namespace):
                       pair_het_cutoff=args.pair_het_cutoff,
                       top_n_comb=args.top_n_comb,
                       include_start_loss=args.include_start_loss,
+                      start_loss_only=args.start_loss_only,
                       target_exons=df_target)
     
     with Pool(processes=args.cpu) as pool:
@@ -168,6 +170,7 @@ if __name__ == '__main__':
     parser.add_argument("--splice-receptor-len", help="Length of splice receptor region (default: 28)", type=int, default=28)
     parser.add_argument("--n-before-stop", help="Minimum number of exons before the stop codon to be considered as target (default: 2)", type=int, default=2)
     parser.add_argument("--include-start-loss", help="Include start loss when finding target region", action="store_true")
+    parser.add_argument("--start-loss-only", help="Only include start loss when finding target region", action="store_true")
 
     # optional parameters to calculate co-heterozygous frequency
     parser.add_argument('--maf', help='MAF cutoff (default: 0.05)', type=float, default=0.05)

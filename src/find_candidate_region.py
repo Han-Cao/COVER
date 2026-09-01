@@ -193,6 +193,7 @@ def find_target_region(x: Transcript,
                        max_deletion: int, 
                        n_before_stop: int, 
                        include_start_loss: bool,
+                       start_loss_only: bool,
                        target_exons: pd.DataFrame=None) -> pd.DataFrame:
     """
     Find target paris of region for deletion
@@ -293,6 +294,10 @@ def find_target_region(x: Transcript,
         
         if len(lst_target) == 0:
             logger.warning(f"No non-coding regions within {max_deletion}bp can delete start codon")
+        # if start loss only, return target region
+        elif start_loss_only:
+            df_target_region = pd.DataFrame(lst_target)
+            return df_target_region
     
     # find targetable non-start codon exons
     frameshift_idx = x.exons.index[(x.exons['region'] == 'CDS') & (x.exons.index <= x.stop_exon - n_before_stop) & (x.exons['frameshift'] != 0)]
@@ -428,6 +433,7 @@ def main_find_candidate_region(args: argparse.Namespace) -> None:
                                                                      args.max_deletion, 
                                                                      args.n_before_stop, 
                                                                      args.include_start_loss,
+                                                                     args.start_loss_only,
                                                                      df_target)])
         # write table
         df_target_region.to_csv(f'{args.output}.candidate_region.txt', sep='\t', index=False)
@@ -443,6 +449,7 @@ def main_find_candidate_region(args: argparse.Namespace) -> None:
                                               args.max_deletion, 
                                               args.n_before_stop, 
                                               args.include_start_loss,
+                                              args.start_loss_only,
                                               df_target)
         # write table and summary
         write_output(transcript, df_target_region, args.output)
@@ -462,6 +469,7 @@ if __name__ == "__main__":
     parser.add_argument("--splice-receptor-len", help="Length of splice receptor region (default: 28)", type=int, default=28)
     parser.add_argument("--n-before-stop", help="Minimum number of exons before the stop codon to be considered as target (default: 2)", type=int, default=2)
     parser.add_argument("--include-start-loss", help="Include start loss when finding target region", action="store_true")
+    parser.add_argument("--start-loss-only", help="Only include start loss when finding target region", action="store_true")
     args = parser.parse_args()
 
     main_find_candidate_region(args)

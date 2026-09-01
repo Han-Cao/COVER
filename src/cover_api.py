@@ -1032,7 +1032,9 @@ async def get_candidate_regions(request: RegionRequest):
                 max_deletion=request.max_deletion,
                 splice_donor_len=request.splice_donor_len,
                 splice_receptor_len=request.splice_receptor_len,
-                n_before_stop=request.n_before_stop
+                n_before_stop=request.n_before_stop,
+                include_start_loss=True, # for API server, alwasy include start loss
+                start_loss_only=False
             )
 
             # Run the main function

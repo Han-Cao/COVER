@@ -131,7 +131,12 @@ A web service of COVER is under development. The API server is provided in `cove
 
 Start the API server:
 ```
-cover-api -t data/Homo_sapiens.GRCh38.110.db -r data/results.db -v data/1kGP_high_coverage_Illumina.filtered.unrelated.SNV.MAF1.bcf --port 8000 --host 127.0.0.1
+cover-api \
+-t data/Homo_sapiens.GRCh38.110.db \
+-r data/results.db \
+-v data/1kGP_high_coverage_Illumina.filtered.unrelated.SNV.MAF1.bcf \
+--port 8000 \
+--host 127.0.0.1
 ```
 
 The `data/results.db` file is generated from the result file `PREFIX.het_freq.all.txt`:

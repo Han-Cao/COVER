@@ -34,6 +34,7 @@ For development and test, run:
 
 ```
 pip install .[dev]
+pytest -v
 ```
 
 To prepare required 1000 Genomes VCFs, make sure you have `bcftools` installed.

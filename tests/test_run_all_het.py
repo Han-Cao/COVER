@@ -6,9 +6,6 @@ import pandas as pd
 
 # Constants
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_DIR = os.path.dirname(TEST_DIR)
-SCRIPT_NAME = 'run_all_het.py'
-SCRIPT = os.path.join(TEST_DIR, '..', 'src', SCRIPT_NAME)
 INPUT_DIR = os.path.join(TEST_DIR, 'input')
 TRUTH_DIR = os.path.join(TEST_DIR, 'truth')
 OUTPUT_DIR = os.path.join(TEST_DIR, 'output')
@@ -20,7 +17,7 @@ def run_script() -> None:
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
 
-    command = ['python', SCRIPT,
+    command = ['cover',
                '-d', os.path.join(TRUTH_DIR, 'Homo_sapiens.GRCh38.110.APP_GFAP.db'),
                '-v', os.path.join(INPUT_DIR, '1kGP_high_coverage_Illumina.GFAP_APP.bcf'),
                '-l', os.path.join(INPUT_DIR, 'APP_GFAP_transcripts.txt'),
@@ -39,7 +36,7 @@ def test_script_execution() -> None:
         run_script()  # This will raise CalledProcessError on failure
         assert True
     except subprocess.CalledProcessError as e:
-        pytest.fail(f"{SCRIPT_NAME} failed with error: {e}")
+        pytest.fail(f"COVER failed with error: {e}")
 
 
 # Compare output files with truth

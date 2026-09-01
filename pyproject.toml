@@ -29,6 +29,11 @@ api = [
     "uvicorn"
 ]
 
+dev = [
+    "pytest",
+    "pytest-order"
+]
+
 [project.scripts]
 cover = "cover.run_all_het:main"
 cover-gtf2db = "cover.gtf2db:main"

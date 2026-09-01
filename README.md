@@ -24,10 +24,16 @@ To install COVER, clone this repository `git clone https://github.com/Han-Cao/CO
 pip install .
 ```
 
-To use COVER-api, install additional dependencies:
+To use COVER-api, run:
 
 ```
 pip install .[api]
+```
+
+For development and test, run:
+
+```
+pip install .[dev]
 ```
 
 To prepare required 1000 Genomes VCFs, make sure you have `bcftools` installed.

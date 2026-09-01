@@ -1033,6 +1033,7 @@ async def get_candidate_regions(request: RegionRequest):
                 splice_donor_len=request.splice_donor_len,
                 splice_receptor_len=request.splice_receptor_len,
                 n_before_stop=request.n_before_stop,
+                target_exons=None, # API does not support user-specified exons yet
                 include_start_loss=True, # for API server, alwasy include start loss
                 start_loss_only=False
             )

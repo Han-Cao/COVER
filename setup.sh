@@ -18,10 +18,13 @@ for i in {1..22} X; do
     -S data/1kg.unrelated.txt \
     -Ou data/vcf_raw/1kGP_high_coverage_Illumina.chr${i}.filtered.SNV_INDEL_SV_phased_panel.vcf.gz | \
     bcftools annotate -x ^INFO/MAF_EUR_unrel,INFO/MAF_EAS_unrel,INFO/MAF_AMR_unrel,INFO/MAF_SAS_unrel,INFO/MAF_AFR_unrel,INFO/ExcHet_EAS,INFO/ExcHet_EUR,INFO/ExcHet_AMR,INFO/ExcHet_SAS,INFO/ExcHet_AFR \
-    -Ob -o data/vcf_raw/1kGP_high_coverage_Illumina.chr${i}.filtered.unrelated.SNV.MAF1.bcf
+    -i 'MAF > 0.01' -Ob -o data/vcf_raw/1kGP_high_coverage_Illumina.chr${i}.filtered.unrelated.SNV.MAF1.bcf
     echo "data/vcf_raw/1kGP_high_coverage_Illumina.chr${i}.filtered.unrelated.SNV.MAF1.bcf" >> data/vcf_raw/vcf_list.txt
 done
 
 # concat vcf
 bcftools concat -n -f data/vcf_raw/vcf_list.txt -o data/1kGP_high_coverage_Illumina.filtered.unrelated.SNV.MAF1.bcf
 bcftools index data/1kGP_high_coverage_Illumina.filtered.unrelated.SNV.MAF1.bcf
+
+# clean raw vcf
+rm -r "data/vcf_raw/"

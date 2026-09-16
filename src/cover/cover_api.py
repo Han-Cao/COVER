@@ -9,40 +9,73 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
+import sys
 import tempfile
 import time
-import datetime
-from typing import List, Optional, Union, Dict, Any, Tuple
+from logging.handlers import TimedRotatingFileHandler
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-# Import local modules
-from cover.find_candidate_region import main_find_candidate_region
 from cover.calculate_het_freq import main_calculate_het_freq
+from cover.find_candidate_region import main_find_candidate_region
+
+# Base name of the active log file; rotated files are renamed to
+# cover-api.YYYY-MM-DD.log (see _dated_rotated_name)
+LOG_BASE_NAME = 'cover-api.log'
+DEFAULT_RETENTION_DAYS = 90
+_DATE_SUFFIX_RE = re.compile(r'\d{4}-\d{2}-\d{2}')
+
+
+def _dated_rotated_name(default_name: str) -> str:
+    """Rename the rotated log file from cover-api.log.YYYY-MM-DD to cover-api.YYYY-MM-DD.log"""
+    directory, base = os.path.split(default_name)
+    stem, sep, date_suffix = base.rpartition('.log.')
+    if not sep or not _DATE_SUFFIX_RE.fullmatch(date_suffix):
+        return default_name
+    return os.path.join(directory, f'{stem}.{date_suffix}.log')
+
 
 # Set up logging to both console and file
-def setup_logging():
-    """Set up logging configuration for both console and file output"""
-    # Create logs directory if it doesn't exist
-    logs_dir = os.path.join(os.getcwd(), 'logs')
-    os.makedirs(logs_dir, exist_ok=True)
+def setup_logging(log_dir: str | None = None, retention_days: int | None = None,
+                  debug: bool = False) -> str:
+    """Set up logging configuration for both stdout and a daily rotating log file
 
-    # Create log filename with current date
-    current_date = datetime.datetime.now().strftime('%Y-%m-%d')
-    log_filename = f'cover-api.{current_date}.log'
-    log_filepath = os.path.join(logs_dir, log_filename)
+    Args:
+        log_dir: Directory for log files. Falls back to $COVER_LOG_DIR, then <cwd>/logs
+        retention_days: Number of rotated log files to keep. Falls back to
+            $COVER_LOG_RETENTION_DAYS, then DEFAULT_RETENTION_DAYS
+        debug: Enable debug level logging on both handlers
+
+    Returns:
+        Absolute path of the active log file
+    """
+    # Resolve log directory: explicit argument > environment > <cwd>/logs
+    if log_dir is None:
+        log_dir = os.environ.get('COVER_LOG_DIR') or os.path.join(os.getcwd(), 'logs')
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Resolve retention: explicit argument > environment > default
+    if retention_days is None:
+        retention_days = int(os.environ.get('COVER_LOG_RETENTION_DAYS', DEFAULT_RETENTION_DAYS))
+    if retention_days < 1:
+        raise ValueError(f"retention_days must be greater than 0, got {retention_days}")
+
+    log_filepath = os.path.abspath(os.path.join(log_dir, LOG_BASE_NAME))
 
     # Create logger
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG if debug else logging.INFO)
 
     # Remove existing handlers to avoid duplicates
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
+        handler.close()
 
     # Create formatters
     file_formatter = logging.Formatter(
@@ -54,24 +87,34 @@ def setup_logging():
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-    # File handler for detailed logging
-    file_handler = logging.FileHandler(log_filepath, encoding='utf-8')
+    # File handler for detailed logging, rotated at midnight and pruned by backupCount.
+    # delay=True avoids creating an empty file before the CLI arguments are parsed.
+    file_handler = TimedRotatingFileHandler(
+        log_filepath,
+        when='midnight',
+        interval=1,
+        backupCount=retention_days,
+        encoding='utf-8',
+        delay=True,
+    )
+    file_handler.namer = _dated_rotated_name
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(file_formatter)
 
-    # Console handler for basic logging
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
+    # Console handler for basic logging (stdout so journald/systemd captures it)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.DEBUG if debug else logging.INFO)
     console_handler.setFormatter(console_formatter)
 
     # Add handlers to logger
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
-    return logger
+    return log_filepath
 
-# Initialize logging with default level
-logger = setup_logging()
+# Initialize logging with defaults from the environment (reconfigured in main() with CLI args)
+logger = logging.getLogger()
+setup_logging()
 
 # Global database and VCF file paths
 TX_DATABASE_PATH = None
@@ -1377,23 +1420,27 @@ def main():
     parser.add_argument("--host", default="127.0.0.1", help="Host to run the server on")
     parser.add_argument("--allowed-origins", default=None, help="Comma separated list of allowed origins")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--log-dir", default=None,
+                        help="Directory for log files (default: $COVER_LOG_DIR or <cwd>/logs)")
+    parser.add_argument("--log-retention-days", type=int, default=None,
+                        help=f"Number of daily rotated log files to keep (default: $COVER_LOG_RETENTION_DAYS or {DEFAULT_RETENTION_DAYS})")
 
     args = parser.parse_args()
 
-    # Configure logging level based on debug flag
-    if args.debug:
-        # Update existing logger configuration for debug mode
-        logger.setLevel(logging.DEBUG)
-        for handler in logger.handlers:
-            handler.setLevel(logging.DEBUG)
-        logger.info("Debug logging enabled")
+    # Reconfigure logging now that the CLI arguments are known
+    try:
+        log_filepath = setup_logging(args.log_dir, args.log_retention_days, args.debug)
+    except ValueError as e:
+        parser.error(str(e))
 
-    # Log the current log file location
-    current_date = datetime.datetime.now().strftime('%Y-%m-%d')
-    log_filename = f'cover-api.{current_date}.log'
-    logs_dir = os.path.join(os.getcwd(), 'logs')
-    log_filepath = os.path.join(logs_dir, log_filename)
+    retention_days = args.log_retention_days
+    if retention_days is None:
+        retention_days = int(os.environ.get('COVER_LOG_RETENTION_DAYS', DEFAULT_RETENTION_DAYS))
+
     logger.info(f"Log file: {log_filepath}")
+    logger.info(f"Log rotation: daily at midnight, keeping {retention_days} days")
+    if args.debug:
+        logger.info("Debug logging enabled")
 
     # Validate database file exists
     if not os.path.exists(args.transcript_database):
@@ -1427,7 +1474,10 @@ def main():
         configure_cors(app, lst_allowed_origins)
         logger.info(f"Allowed origins: {lst_allowed_origins}")
 
-    uvicorn.run(app, host=args.host, port=args.port)
+    # log_config=None keeps uvicorn's own dictConfig out of the way so that the
+    # uvicorn/uvicorn.error/uvicorn.access loggers propagate to our root handlers
+    # (rotating file + stdout) instead of writing to their own stderr/stdout streams
+    uvicorn.run(app, host=args.host, port=args.port, log_config=None)
 
 if __name__ == "__main__":
     main()

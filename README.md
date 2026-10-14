@@ -1,4 +1,4 @@
-# COVER
+# COmmon Variants-assisted genome-Editing Remedy
 
 ## Table of Contents
 1. [Overview](#overview)
@@ -12,7 +12,7 @@
 
 ## Overview
 
-Code for COVER strategy. The document is under construction.
+Code for COVER strategy. The documentation is under construction.
 
 ## Installation
 

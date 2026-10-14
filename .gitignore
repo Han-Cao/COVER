@@ -7,6 +7,12 @@ analysis/
 output/
 .vscode/
 results.db
+cover-web/
+template/
+deploy/
+*zip
+PLAN*
+*bkp
 
 # Distribution / packaging
 .Python
